@@ -65,6 +65,14 @@ jobs:
       # The condition if: success() was here, removing it.
       # We'll control email sending based on its outputs.
 
+    - name: Upload JSON Signal Artifact
+      if: hashFiles('results/live_signals/daily_signal.json') != '' # Only upload if the file exists
+      uses: actions/upload-artifact@v4
+      with:
+        name: daily-trading-signal
+        path: results/live_signals/daily_signal.json
+        retention-days: 14
+
     - name: Set current date
       id: set_date
       run: echo "TODAY_DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV

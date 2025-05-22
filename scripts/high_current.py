@@ -27,6 +27,7 @@ from tqdm import tqdm
 from collections import OrderedDict 
 from typing import Any # Add this import
 from pathlib import Path
+import json # Added for JSON operations
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -336,44 +337,154 @@ def print_trade_summary_and_distribution(all_qualified_setups, score_bins):
     if not has_trades_in_bins: logger.info("  No trades fell into defined score bins.")
     logger.info("--- End of Summary ---")
 
+def prepare_signal_data_dict(trade_candidate_list, execution_date_str):
+    """
+    Prepares a dictionary with signal data for the top candidate or a 'no signal' message.
+    Handles NaN/-np.inf values and ensures appropriate Python data types.
+    """
+    if trade_candidate_list:
+        top_signal = trade_candidate_list[0] # Process only the top signal
+
+        # Helper for safe conversion
+        def safe_float(value):
+            if pd.notna(value) and value != -np.inf and value != np.inf:
+                try: return float(value)
+                except (ValueError, TypeError): return None
+            return None
+
+        def safe_int(value):
+            if pd.notna(value) and value != -np.inf and value != np.inf:
+                try: return int(value)
+                except (ValueError, TypeError): return None
+            return None
+
+        hist_strength_score = safe_float(top_signal.get('hist_strength_score'))
+        hist_win_rate = safe_float(top_signal.get('hist_win_rate'))
+        hist_total_trades = safe_int(top_signal.get('hist_total_trades'))
+
+        signal_data = {
+            "signal_found": True,
+            "date": execution_date_str,
+            "symbol": str(top_signal.get('symbol', '')),
+            "setup_type": str(top_signal.get('setup_type', '')),
+            "tier": str(top_signal.get('tier', '')),
+            "strategy_score": safe_float(top_signal.get('score')),
+            "historical_strength_score": hist_strength_score,
+            "historical_win_rate": hist_win_rate,
+            "historical_total_trades": hist_total_trades,
+            "latest_close": safe_float(top_signal.get('latest_close')),
+            "entry_price": safe_float(top_signal.get('entry_price')),
+            "stop_loss_price": safe_float(top_signal.get('stop_loss_price')),
+            "target_price": safe_float(top_signal.get('target_price')),
+            "risk_reward_ratio": safe_float(top_signal.get('risk_reward_ratio')),
+            "atr": safe_float(top_signal.get('atr'))
+        }
+        # Ensure all required float fields that aren't explicitly handled for None are float
+        for key in ["strategy_score", "latest_close", "entry_price", "stop_loss_price", "target_price", "risk_reward_ratio", "atr"]:
+            if signal_data[key] is None and top_signal.get(key) is not None : # If conversion failed but original existed
+                 logger.warning(f"Value for {key} was {top_signal.get(key)} and failed conversion to float, resulting in None.")
+            elif signal_data[key] is None: # If original was None or NaN
+                 logger.debug(f"Field {key} is None for symbol {signal_data['symbol']}.")
+
+
+    else:
+        signal_data = {
+            "signal_found": False,
+            "date": execution_date_str,
+            "message": "No high-probability signal met criteria today."
+        }
+    return signal_data
+
+def generate_and_save_json(data_dict, base_dir_path_str):
+    """
+    Generates a JSON string from the data_dict and saves it to a file.
+    The filename and path depend on the execution environment (GitHub Actions or local).
+    """
+    try:
+        json_string = json.dumps(data_dict, indent=4)
+    except TypeError as e:
+        logger.error(f"Error serializing data_dict to JSON: {e}")
+        return
+
+    # Define Output Directory
+    output_dir = Path(base_dir_path_str) / 'results' / 'live_signals'
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.error(f"Error creating directory {output_dir}: {e}")
+        return
+
+    # Determine Filename based on environment
+    is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
+    
+    if is_github_actions:
+        filename = "daily_signal.json"
+    else:
+        # Ensure date is in the dictionary and is a string, otherwise use a fallback.
+        date_str = data_dict.get("date", datetime.today().strftime('%Y-%m-%d'))
+        if not isinstance(date_str, str) or not date_str: # Basic check for valid date string
+            logger.warning(f"Date in data_dict is invalid or missing for filename, using today's date as fallback.")
+            date_str = datetime.today().strftime('%Y-%m-%d')
+        filename = f"daily_signal_{date_str}.json"
+        
+    filepath = output_dir / filename
+
+    # Save JSON to File
+    try:
+        with open(filepath, 'w') as f:
+            f.write(json_string)
+        logger.info(f"Successfully saved JSON signal data to {filepath}")
+    except IOError as e:
+        logger.error(f"Error saving JSON to {filepath}: {e}")
+
 def main():
     logger.info("Starting High Probability Live Signal Generator (Refined)...")
     
     load_long_term_historical_stats() # Load historical performance for tie-breaking
     
-    # `create_dummy_ticker_files()` is not needed if ticker files are managed externally
-    # If you want it for first-time setup, ensure paths in it are also correct.
-    
     all_potential_signals_today = find_current_setups(STRATEGY_PARAMS) # Pass current params
     
     print_trade_summary_and_distribution(all_potential_signals_today, SCORE_BINS)
 
-    if all_potential_signals_today:
-        # --- MODIFIED: Select only the top 1 trade for the day ---
-        final_trade_for_today = all_potential_signals_today[:5] 
-        logger.info(f"\n--- Top Selected Trade Candidate for Today (Max 5) ---")
+    # Determine the execution date for the report
+    execution_date_str = datetime.today().strftime('%Y-%m-%d')
 
-        for i, trade in enumerate(final_trade_for_today, start=1):
-            print(f"\nTrade {i}:")
+    # Prepare the signal data dictionary using only the top signal if available
+    signal_data_dict = prepare_signal_data_dict(all_potential_signals_today, execution_date_str)
+    
+    # Generate and save the JSON file
+    generate_and_save_json(signal_data_dict, PROJECT_BASE_DIR)
+
+    # The existing console output can remain for verbose logging if desired.
+    # For this task, we keep it but note that signal_data_dict is based on the top signal.
+    if signal_data_dict["signal_found"]:
+        # --- MODIFIED: Console output reflects top 5, but JSON is top 1 ---
+        # Keep existing console output for top 5 for now, or adjust as needed.
+        # The task is about the dictionary, not changing this console output yet.
+        final_trade_for_today_console_display = all_potential_signals_today[:5] 
+        logger.info(f"\n--- Top Selected Trade Candidate(s) for Today (Console Display: Max 5) ---")
+
+        for i, trade in enumerate(final_trade_for_today_console_display, start=1):
+            print(f"\nTrade {i}:") # Python's print goes to stdout, logger.info to stderr by default
             print(f"  Symbol: {trade['symbol']}")
-            print(f"  Date: {trade['date']}")
+            print(f"  Date: {trade['date']}") # This is the date from the data, not execution_date_str
             print(f"  Setup Type: {trade['setup_type']} (Tier: {trade['tier']})")
             print(f"  Strategy Score: {trade['score']:.3f}")
-            if pd.notna(trade['hist_strength_score']) and trade['hist_strength_score'] > -np.inf:
+            if pd.notna(trade['hist_strength_score']) and trade['hist_strength_score'] != -np.inf : # Check against -np.inf
                 print(f"  Historical Strength: {trade['hist_strength_score']:.2f} (Win Rate: {trade['hist_win_rate']:.2%}, Trades: {int(trade['hist_total_trades'])})")
             else:
                 print(f"  Historical Strength: N/A")
             print(f"  Current Close: {trade['latest_close']:.2f}")
             print(f"  Potential Entry: ~{trade['entry_price']:.2f}")
             print(f"  Potential Stop-Loss: {trade['stop_loss_price']:.2f}")
-        print(f"  Potential Target: {trade['target_price']:.2f}")
-        print(f"  Potential R:R: {trade['risk_reward_ratio']:.2f}")
-        print(f"  ATR: {trade['atr']:.3f}")
+            print(f"  Potential Target: {trade['target_price']:.2f}") # Corrected indentation for target_price
+            print(f"  Potential R:R: {trade['risk_reward_ratio']:.2f}")
+            print(f"  ATR: {trade['atr']:.3f}")
 
         logger.info("\nNote: Weekly trade limit (e.g., max 3) should be managed by the user based on daily signals.")
             
     else:
-        logger.info("No trade candidates met the refined criteria for today.")
+        logger.info("No trade candidates met the refined criteria for today (as per signal_data_dict).") # Adjusted log
             
     logger.info("\nLive Signal Generator finished.")
     logger.info("Disclaimer: This is NOT financial advice. Data from yfinance can have delays. Always do your own research.")
