@@ -1,0 +1,1 @@
+trade_id,symbol,entry_date,entry_price,stop_loss_price,target_price,risk_reward_ratio,atr_at_entry,trade_type,source_signal_date,status,current_price,unrealized_pnl,exit_date,exit_price,realized_pnl,exit_reason,holding_period,notes

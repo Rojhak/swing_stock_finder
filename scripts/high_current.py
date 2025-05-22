@@ -350,8 +350,8 @@ def main():
 
     if all_potential_signals_today:
         # --- MODIFIED: Select only the top 1 trade for the day ---
-        final_trade_for_today = all_potential_signals_today[:5] 
-        logger.info(f"\n--- Top Selected Trade Candidate for Today (Max 5) ---")
+        final_trade_for_today = all_potential_signals_today[:1] 
+        logger.info(f"\n--- Top Selected Trade Candidate for Today (Max 1) ---")
 
         for i, trade in enumerate(final_trade_for_today, start=1):
             print(f"\nTrade {i}:")
