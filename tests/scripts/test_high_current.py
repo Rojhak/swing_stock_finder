@@ -5,268 +5,264 @@ from unittest.mock import patch, MagicMock, call, mock_open
 from datetime import datetime, date, timedelta
 import json
 from pathlib import Path
-import logging # Import logging
+import logging
 
-# Assuming tests are run from the project root directory
-from scripts.high_current import find_current_setups, generate_json_output, STRATEGY_PARAMS
-import scripts.high_current as high_current_module # To patch globals
+from scripts.high_current import (
+    find_current_setups, 
+    generate_json_output, 
+    main as high_current_main,
+    _print_signal_details_to_console,
+    STRATEGY_PARAMS,
+    TICKER_FILES 
+)
+import scripts.high_current as high_current_module
 
-# Define PROJECT_BASE_DIR for tests, assuming tests are in tests/scripts/
-# and project root is two levels up.
-TEST_SCRIPT_PATH = Path(__file__).resolve() # tests/scripts/test_high_current.py
-TESTS_DIR = TEST_SCRIPT_PATH.parent.parent # tests/
-PROJECT_BASE_DIR = TESTS_DIR.parent # project root /app/
+TEST_SCRIPT_PATH = Path(__file__).resolve()
+TESTS_DIR = TEST_SCRIPT_PATH.parent.parent
+PROJECT_BASE_DIR = TESTS_DIR.parent
 
 class TestHighCurrent(unittest.TestCase):
 
     def setUp(self):
-        # Disable logging for most tests unless specifically testing log output
-        # Use self.assertLogs for specific log checks, which temporarily enables logging.
         logging.disable(logging.CRITICAL)
-        
-        # Store original PROJECT_BASE_DIR from the module and patch it
         self.original_project_base_dir = high_current_module.PROJECT_BASE_DIR
         high_current_module.PROJECT_BASE_DIR = PROJECT_BASE_DIR
+        
+        self.mock_datetime_patch = patch('scripts.high_current.datetime')
+        self.mock_datetime = self.mock_datetime_patch.start()
+        self.mock_datetime.now.return_value = datetime(2023, 10, 27, 10, 0, 0) # Consistent "now" for tests
 
     def tearDown(self):
-        # Restore logging state
         logging.disable(logging.NOTSET)
-        # Restore original PROJECT_BASE_DIR
         high_current_module.PROJECT_BASE_DIR = self.original_project_base_dir
+        self.mock_datetime_patch.stop()
 
-
-    def create_mock_indicator_df(self, symbol_name='TICK1', signal_date=datetime(2023,10,26).date()):
-        """
-        Creates a mock DataFrame as it would be returned by calculate_indicators,
-        with enough data to pass checks in find_current_setups.
-        The date of the latest record will be signal_date.
-        """
-        # Create a date range ending on signal_date
-        dates = pd.to_datetime([signal_date - timedelta(days=x) for x in range(STRATEGY_PARAMS['min_data_days'] + 50)]).sort_values()
-
+    def _create_mock_df_for_symbol(self, symbol, signal_date_val):
+        """ Helper to create a DataFrame that can be returned by calculate_indicators. """
+        # Using a passed-in signal_date_val which should be a datetime.date object
+        dates = pd.to_datetime([signal_date_val - timedelta(days=x) for x in range(STRATEGY_PARAMS['min_data_days'] + 50)]).sort_values()
+        
+        # Basic structure, can be customized further per test if needed
         data = {
-            'Open': np.random.rand(len(dates)) * 100 + 50,
-            'High': np.random.rand(len(dates)) * 10 + 150,
-            'Low': np.random.rand(len(dates)) * 10 + 40,
-            'Close': np.random.rand(len(dates)) * 100 + 50,
-            'Volume': np.random.randint(100000, 500000, len(dates)),
-            # Add other columns that calculate_indicators is expected to produce and detect_setup might use
-            'ma5': np.random.rand(len(dates)) * 100,
-            'ma20': np.random.rand(len(dates)) * 100,
-            'ma50': np.random.rand(len(dates)) * 100,
-            'ma200': np.random.rand(len(dates)) * 100,
-            'rsi': np.random.rand(len(dates)) * 100,
-            'ATR': np.random.rand(len(dates)) * 5,
+            'Open': np.full(len(dates), 100.0), 'High': np.full(len(dates), 105.0),
+            'Low': np.full(len(dates), 95.0), 'Close': np.full(len(dates), 100.0),
+            'Volume': np.full(len(dates), 100000),
+            'ma5': np.full(len(dates), 100.0), 'ma20': np.full(len(dates), 100.0),
+            'ma50': np.full(len(dates), 100.0), 'ma200': np.full(len(dates), 100.0),
+            'rsi': np.full(len(dates), 50.0), 'ATR': np.full(len(dates), 5.0),
             'day_thick_line_green': np.ones(len(dates)),
-            'close_vs_open': np.random.rand(len(dates)) * 0.1,
-            'volume_ratio': np.random.rand(len(dates)) * 2,
+            'close_vs_open': np.full(len(dates), 0.01),
+            'volume_ratio': np.full(len(dates), 1.5),
         }
         df = pd.DataFrame(data, index=dates)
-        df.index.name = 'Date' # yfinance data usually has 'Date' index
-        
-        # Ensure the latest 'Close' is not NaN
-        df.iloc[-1, df.columns.get_loc('Close')] = 100.0 
-        # Ensure ATR is not NaN for the last record (used in trade_params)
-        df.iloc[-1, df.columns.get_loc('ATR')] = 5.0
-
+        df.name = symbol # Set df.name to allow identification in later mocks
+        df.iloc[-1, df.columns.get_loc('Close')] = 100.0  # Ensure last close is valid
+        df.iloc[-1, df.columns.get_loc('ATR')] = 5.0      # Ensure last ATR is valid
         return df
 
-    # --- Tests for find_current_setups ---
     @patch('scripts.high_current.apply_high_probability_filter_live')
     @patch('scripts.high_current.calculate_potential_trade_params')
     @patch('scripts.high_current.detect_setup')
     @patch('scripts.high_current.calculate_indicators')
     @patch('scripts.high_current.fetch_stock_data_yf')
     @patch('scripts.high_current.load_symbols')
-    def test_find_current_setups_signal_found(self, mock_load_symbols, mock_fetch_stock_data, 
-                                             mock_calculate_indicators, mock_detect_setup,
-                                             mock_calc_trade_params, mock_apply_filter):
-        mock_load_symbols.return_value = ['TICK1']
+    def test_find_current_setups_complex_scenarios(self, mock_load_symbols, mock_fetch_stock_data,
+                                                 mock_calculate_indicators, mock_detect_setup,
+                                                 mock_calc_trade_params, mock_apply_filter):
         
-        # Mock fetch_stock_data_yf to return a basic DataFrame (contents don't matter much here
-        # as calculate_indicators is mocked)
-        mock_df_raw = pd.DataFrame({'Close': [10,20]}, index=pd.to_datetime(['2023-01-01', '2023-01-02']))
-        mock_fetch_stock_data.return_value = mock_df_raw
+        signal_date_obj = datetime(2023, 10, 26).date()
         
-        signal_date_obj = datetime(2023, 10, 26).date() # Used for date assertion
-        mock_df_indicators = self.create_mock_indicator_df('TICK1', signal_date=signal_date_obj)
-        mock_calculate_indicators.return_value = mock_df_indicators
-        
-        # detect_setup returns: setup_detected, setup_type, tier
+        # Common mock behaviors
         mock_detect_setup.return_value = (True, 'MOCK_SETUP', 'high')
-
-        mock_trade_params = {
+        mock_calc_trade_params.side_effect = lambda df, entry_idx: {
             'entry_price': 100.0, 'stop_loss_price': 90.0, 'target_price': 120.0,
-            'risk_reward_ratio': 2.0, 'atr': 5.0
+            'risk_reward_ratio': 2.0, 'atr': 5.0 # df.name (symbol) will be used by apply_filter
         }
-        mock_calc_trade_params.return_value = mock_trade_params
-        mock_apply_filter.return_value = (True, 0.95) # passes_filter, score
+        mock_calculate_indicators.side_effect = lambda df: df # Pass through df from fetch
+        mock_fetch_stock_data.side_effect = lambda symbol, period: self._create_mock_df_for_symbol(symbol, signal_date_obj)
 
-        hist_perf_data = {
-            'symbol': ['TICK1', 'TICK2'], # TICK2 ensures it picks TICK1
-            'hist_strength_score': [np.nan, 70.0],
-            'hist_win_rate': [-np.inf, 0.6],    
-            'hist_total_trades': [pd.NA, 20] 
-        }
-        mock_hist_perf_df = pd.DataFrame(hist_perf_data)
-        # Coerce 'hist_total_trades' to numeric, then to Int64 to handle NA, then fillna for np.nan if any non-convertible
-        mock_hist_perf_df['hist_total_trades'] = pd.to_numeric(mock_hist_perf_df['hist_total_trades'], errors='coerce')
-
-
-        with patch.object(high_current_module, 'long_term_historical_perf_df', mock_hist_perf_df):
-            result = find_current_setups(STRATEGY_PARAMS)
-
-        self.assertIsInstance(result, dict)
-        self.assertTrue(result['signal_found'])
-        self.assertEqual(result['symbol'], 'TICK1')
-        self.assertIsInstance(result['date'], str) 
-        self.assertEqual(result['date'], signal_date_obj.strftime('%Y-%m-%d'))
-        self.assertEqual(result['setup_type'], 'MOCK_SETUP')
-        self.assertEqual(result['tier'], 'high')
-        self.assertEqual(result['strategy_score'], 0.95)
+        # --- Scenario 1: Overall signal found, signals in all segments ---
+        mock_load_symbols.return_value = {'market1': ['M1S1', 'M1S2'], 'market2': ['M2S1']}
         
-        self.assertIsNone(result['historical_strength_score'])
-        self.assertIsNone(result['historical_win_rate'])
-        self.assertIsNone(result['historical_total_trades'])
+        def apply_filter_s1(trade_params, setup_type, tier, params_dict):
+            # Assuming trade_params now gets symbol via df.name passed through to setup_info
+            # The 'score' is in setup_info which is then passed to _format_signal_output
+            # For simplicity, we'll assume the symbol is available in the dict passed to apply_filter
+            # This requires setup_info to be constructed before apply_filter_live, which is not the case.
+            # Instead, the symbol is known when fetch_stock_data is called.
+            # The mock chain needs to ensure the score is associated with the symbol correctly.
+            # Let's mock `apply_high_probability_filter_live` based on the symbol implicitly known from `fetch_stock_data_yf`'s current symbol.
+            # This is tricky because `apply_high_probability_filter_live` doesn't directly receive the symbol.
+            # We need to make `mock_apply_filter` aware of the current symbol being processed.
+            # One way: Use a global or class variable in the test, set by `mock_fetch_stock_data`. This is hacky.
+            # Better way: `mock_apply_filter` is part of the loop, so if we can make its behavior conditional.
+            # The current symbol IS available in `find_current_setups` loop.
+            # For the test, let's make `mock_apply_filter`'s behavior depend on something passed to it,
+            # or make it stateful based on call order if symbols are processed predictably.
+            # Simplest: make `apply_filter_live` return values based on pre-set scores for symbols.
+            current_symbol = mock_fetch_stock_data.call_args[0][0] # Get symbol from last call to fetch_stock_data
+            if current_symbol == 'M1S1': return (True, 0.95) # Overall top
+            if current_symbol == 'M1S2': return (True, 0.85)
+            if current_symbol == 'M2S1': return (True, 0.90)
+            return (False, 0.0)
+        mock_apply_filter.side_effect = apply_filter_s1
 
-        self.assertEqual(result['latest_close'], mock_df_indicators['Close'].iloc[-1])
-        self.assertEqual(result['entry_price'], 100.0)
-        self.assertEqual(result['stop_loss_price'], 90.0)
-        self.assertEqual(result['target_price'], 120.0)
-        self.assertEqual(result['risk_reward_ratio'], 2.0)
-        self.assertEqual(result['atr'], 5.0)
+        hist_data_s1 = {'symbol': ['M1S1', 'M1S2', 'M2S1'], 'hist_strength_score': [90,80,85], 'hist_win_rate': [0.7,0.6,0.65], 'hist_total_trades': [10,12,15]}
+        with patch.object(high_current_module, 'long_term_historical_perf_df', pd.DataFrame(hist_data_s1)):
+            result_s1 = find_current_setups(STRATEGY_PARAMS)
 
-        self.assertIsInstance(result['strategy_score'], float)
-        self.assertIsInstance(result['latest_close'], float)
-        self.assertIsInstance(result['entry_price'], float)
+        self.assertTrue(result_s1['overall_top_signal']['signal_found'])
+        self.assertEqual(result_s1['overall_top_signal']['symbol'], 'M1S1')
+        self.assertEqual(result_s1['overall_top_signal']['market_segment'], 'market1')
+        self.assertEqual(result_s1['overall_top_signal']['date'], '2023-10-26')
+        self.assertTrue(result_s1['segmented_signals']['market1']['signal_found'])
+        self.assertEqual(result_s1['segmented_signals']['market1']['symbol'], 'M1S1') # M1S1 score 0.95 > M1S2 score 0.85
+        self.assertTrue(result_s1['segmented_signals']['market2']['signal_found'])
+        self.assertEqual(result_s1['segmented_signals']['market2']['symbol'], 'M2S1')
+
+        # --- Scenario 2: Overall signal found, market2 no signal ---
+        def apply_filter_s2(trade_params, setup_type, tier, params_dict):
+            current_symbol = mock_fetch_stock_data.call_args[0][0]
+            if current_symbol == 'M1S1': return (True, 0.95)
+            if current_symbol == 'M1S2': return (True, 0.85)
+            if current_symbol == 'M2S1': return (False, 0.40) # M2S1 fails filter
+            return (False, 0.0)
+        mock_apply_filter.side_effect = apply_filter_s2
+        with patch.object(high_current_module, 'long_term_historical_perf_df', pd.DataFrame(hist_data_s1)):
+            result_s2 = find_current_setups(STRATEGY_PARAMS)
+        
+        self.assertTrue(result_s2['overall_top_signal']['signal_found'])
+        self.assertEqual(result_s2['overall_top_signal']['symbol'], 'M1S1')
+        self.assertTrue(result_s2['segmented_signals']['market1']['signal_found'])
+        self.assertEqual(result_s2['segmented_signals']['market1']['symbol'], 'M1S1')
+        self.assertFalse(result_s2['segmented_signals']['market2']['signal_found'])
+        self.assertEqual(result_s2['segmented_signals']['market2']['date'], '2023-10-27') # Default "now" date
+
+        # --- Scenario 3: No overall signal (all fail filter) ---
+        mock_apply_filter.return_value = (False, 0.4) # All symbols fail
+        with patch.object(high_current_module, 'long_term_historical_perf_df', pd.DataFrame(hist_data_s1)):
+            result_s3 = find_current_setups(STRATEGY_PARAMS)
+
+        self.assertFalse(result_s3['overall_top_signal']['signal_found'])
+        self.assertEqual(result_s3['overall_top_signal']['date'], '2023-10-27') # Default "now"
+        self.assertFalse(result_s3['segmented_signals']['market1']['signal_found'])
+        self.assertFalse(result_s3['segmented_signals']['market2']['signal_found'])
+        # Ensure all configured markets are present in segmented_signals
+        for market_key in TICKER_FILES.keys():
+            self.assertIn(market_key, result_s3['segmented_signals'])
+            self.assertFalse(result_s3['segmented_signals'][market_key]['signal_found'])
 
 
-    @patch('scripts.high_current.apply_high_probability_filter_live')
-    @patch('scripts.high_current.calculate_potential_trade_params') 
-    @patch('scripts.high_current.detect_setup') 
-    @patch('scripts.high_current.calculate_indicators') 
-    @patch('scripts.high_current.fetch_stock_data_yf')
-    @patch('scripts.high_current.load_symbols')
-    @patch('scripts.high_current.datetime') 
-    def test_find_current_setups_no_signal_found(self, mock_datetime_hc, mock_load_symbols, mock_fetch_stock_data,
-                                                mock_calculate_indicators, mock_detect_setup,
-                                                mock_calc_trade_params, mock_apply_filter):
-        mock_load_symbols.return_value = ['TICK1']
-        mock_df_raw = pd.DataFrame({'Close': [10,20]}, index=pd.to_datetime(['2023-01-01', '2023-01-02']))
-        mock_fetch_stock_data.return_value = mock_df_raw
-        mock_df_indicators = self.create_mock_indicator_df('TICK1')
-        mock_calculate_indicators.return_value = mock_df_indicators
-        mock_detect_setup.return_value = (True, 'MOCK_SETUP', 'high') 
-        mock_calc_trade_params.return_value = {'entry_price': 100.0, 'stop_loss_price': 90.0, 'target_price': 120.0, 'risk_reward_ratio': 2.0, 'atr': 5.0}
-        mock_apply_filter.return_value = (False, 0.5) # Filtered out
+    @patch('builtins.print')
+    def test_print_signal_details_console(self, mock_print):
+        title = "Test Title"
+        # Test signal found
+        signal_data_found = {
+            'signal_found': True, 'symbol': 'XYZ', 'date': '2023-01-15', 'market_segment': 'test_market',
+            'setup_type': 'TestSetup', 'tier': 'High', 'strategy_score': 0.987,
+            'historical_strength_score': 75.5, 'historical_win_rate': 0.65, 'historical_total_trades': 30,
+            'latest_close': 123.45, 'entry_price': 124.00, 'stop_loss_price': 120.00,
+            'target_price': 130.00, 'risk_reward_ratio': 1.5, 'atr': 2.500
+        }
+        _print_signal_details_to_console(signal_data_found, title)
+        
+        # Basic checks for content
+        calls = [c[0][0] for c in mock_print.call_args_list] # Get the first arg of each print call
+        self.assertIn(f"\n{title}", calls)
+        self.assertTrue(any("Symbol: XYZ" in c for c in calls))
+        self.assertTrue(any("Strategy Score: 0.987" in c for c in calls))
+        self.assertTrue(any("Win Rate: 65.00%" in c for c in calls))
+        mock_print.reset_mock()
 
-        mock_datetime_hc.now.return_value = datetime(2023, 10, 27, 10, 0, 0)
+        # Test signal not found
+        signal_data_not_found = {'signal_found': False, 'message': 'No signal here.'}
+        _print_signal_details_to_console(signal_data_not_found, title)
+        calls = [c[0][0] for c in mock_print.call_args_list]
+        self.assertIn(f"\n{title}", calls)
+        self.assertTrue(any("No signal here." in c for c in calls))
+        mock_print.reset_mock()
 
-        with patch.object(high_current_module, 'long_term_historical_perf_df', None):
-            result = find_current_setups(STRATEGY_PARAMS)
+        # Test empty dict
+        _print_signal_details_to_console({}, title)
+        calls = [c[0][0] for c in mock_print.call_args_list]
+        self.assertIn(f"\n{title}", calls)
+        self.assertTrue(any("No signal data provided" in c for c in calls))
 
-        self.assertIsInstance(result, dict)
-        self.assertFalse(result['signal_found'])
-        self.assertEqual(result['date'], '2023-10-27')
-        self.assertEqual(result['message'], 'No signal found today.')
 
-    # --- Tests for generate_json_output ---
-
-    @patch('scripts.high_current.logger') 
+    @patch('scripts.high_current.logger')
     @patch('builtins.print')
     @patch('os.environ')
-    def test_generate_json_output_github_actions(self, mock_environ, mock_print, mock_logger_hc):
-        mock_environ.get.return_value = 'true' 
-        sample_data_signal = {'signal_found': True, 'symbol': 'TICK1', 'date': '2023-10-27'}
-        
-        generate_json_output(sample_data_signal)
-        expected_json_signal = json.dumps(sample_data_signal, indent=4)
-        mock_print.assert_called_with(expected_json_signal)
-        mock_logger_hc.info.assert_any_call("Printing JSON to stdout for GitHub Action...")
-
-        sample_data_no_signal = {'signal_found': False, 'date': '2023-10-27', 'message': 'No signal'}
-        generate_json_output(sample_data_no_signal)
-        expected_json_no_signal = json.dumps(sample_data_no_signal, indent=4)
-        mock_print.assert_called_with(expected_json_no_signal) 
-        
-        self.assertEqual(mock_logger_hc.info.call_count, 2) 
-        mock_logger_hc.info.assert_called_with("Printing JSON to stdout for GitHub Action...")
+    def test_generate_json_output_github_actions_complex(self, mock_environ, mock_print, mock_logger_hc):
+        mock_environ.get.return_value = 'true'
+        complex_data = {
+            'overall_top_signal': {'signal_found': True, 'symbol': 'OVERALL', 'date': '2023-10-26'},
+            'segmented_signals': {'market1': {'signal_found': False, 'message': 'No M1 signal'}}
+        }
+        generate_json_output(complex_data)
+        expected_json = json.dumps(complex_data, indent=4)
+        mock_print.assert_called_with(expected_json)
+        mock_logger_hc.info.assert_any_call("Printing complex signal data (overall and segmented) to stdout for GitHub Action...")
 
 
     @patch('scripts.high_current.logger')
     @patch('builtins.open', new_callable=mock_open)
     @patch('scripts.high_current.Path.mkdir')
     @patch('os.environ')
-    @patch('scripts.high_current.datetime') 
-    def test_generate_json_output_local_execution(self, mock_datetime_hc, mock_environ, mock_mkdir, mock_file_open, mock_logger_hc):
-        mock_environ.get.return_value = 'false' 
+    # mock_datetime is already active from setUp
+    def test_generate_json_output_local_execution_date_logic(self, mock_environ, mock_mkdir, mock_file_open, mock_logger_hc):
+        mock_environ.get.return_value = 'false'
         
-        sample_data_signal = {'signal_found': True, 'symbol': 'TICK1', 'date': '2023-10-27'}
-        expected_filename_signal = f"daily_signal_2023-10-27.json"
-        expected_filepath_signal = PROJECT_BASE_DIR / "results" / "live_signals" / expected_filename_signal
+        # Case 1: Date from overall_top_signal
+        data_overall_date = {'overall_top_signal': {'signal_found': True, 'date': '2023-01-01'}, 'segmented_signals': {}}
+        generate_json_output(data_overall_date)
+        expected_path1 = PROJECT_BASE_DIR / "results" / "live_signals" / "daily_signal_2023-01-01.json"
+        mock_file_open.assert_called_with(expected_path1, 'w')
 
-        generate_json_output(sample_data_signal)
+        # Case 2: Date from segmented_signals
+        data_segment_date = {
+            'overall_top_signal': {'signal_found': False, 'message': 'No overall'},
+            'segmented_signals': {'market1': {'signal_found': True, 'date': '2023-02-01'}}
+        }
+        generate_json_output(data_segment_date)
+        expected_path2 = PROJECT_BASE_DIR / "results" / "live_signals" / "daily_signal_2023-02-01.json"
+        mock_file_open.assert_called_with(expected_path2, 'w')
+
+        # Case 3: Fallback to current date (mocked by self.mock_datetime.now)
+        data_fallback_date = {'overall_top_signal': {'signal_found': False}, 'segmented_signals': {'market1': {'signal_found': False}}}
+        generate_json_output(data_fallback_date)
+        expected_path3 = PROJECT_BASE_DIR / "results" / "live_signals" / "daily_signal_2023-10-27.json" # From setUp
+        mock_file_open.assert_called_with(expected_path3, 'w')
+        mock_logger_hc.warning.assert_any_call("Could not determine signal date from overall or segmented signals; using current date for filename.")
+
+    @patch('scripts.high_current._print_signal_details_to_console')
+    @patch('scripts.high_current.generate_json_output')
+    @patch('scripts.high_current.find_current_setups')
+    @patch('scripts.high_current.load_long_term_historical_stats')
+    def test_main_function_orchestration_and_console_output(self, mock_load_hist, mock_find_setups, 
+                                                             mock_gen_json, mock_print_details):
+        mock_overall_signal = {'signal_found': True, 'symbol': 'OVERALL', 'market_segment': 'market1', 'date': '2023-10-27'}
+        mock_segment1_signal = {'signal_found': True, 'symbol': 'M1S1', 'market_segment': 'market1', 'date': '2023-10-27'}
+        mock_segment2_no_signal = {'signal_found': False, 'message': 'No M2', 'market_segment': 'market2', 'date': '2023-10-27'}
         
-        mock_mkdir.assert_called_with(parents=True, exist_ok=True)
-        mock_file_open.assert_called_with(expected_filepath_signal, 'w')
-        mock_file_open().write.assert_called_with(json.dumps(sample_data_signal, indent=4))
-        mock_logger_hc.info.assert_any_call(f"Saving JSON to file: {expected_filepath_signal}")
+        complex_data_mock = {
+            'overall_top_signal': mock_overall_signal,
+            'segmented_signals': { 'market1': mock_segment1_signal, 'market2': mock_segment2_no_signal }
+        }
+        mock_find_setups.return_value = complex_data_mock
 
-        mock_datetime_hc.now.return_value = datetime(2023, 10, 29) 
-        sample_data_date_missing = {'signal_found': True, 'symbol': 'TICK2'} 
-        expected_filename_date_missing = f"daily_signal_2023-10-29.json"
-        expected_filepath_date_missing = PROJECT_BASE_DIR / "results" / "live_signals" / expected_filename_date_missing
+        high_current_main()
 
-        generate_json_output(sample_data_date_missing)
-        mock_file_open.assert_called_with(expected_filepath_date_missing, 'w')
-        mock_logger_hc.warning.assert_any_call("Signal date missing or not a string in signal_data; using current date for filename.")
-        mock_logger_hc.info.assert_any_call(f"Saving JSON to file: {expected_filepath_date_missing}")
-
-
-    @patch('scripts.high_current.logger')
-    @patch('os.environ')
-    def test_generate_json_output_json_error(self, mock_environ, mock_logger_hc):
-        mock_environ.get.return_value = 'false' 
-        non_serializable_data = {'data': object()} 
-
-        generate_json_output(non_serializable_data)
-        mock_logger_hc.error.assert_called_once()
-        self.assertIn("Error serializing signal_data to JSON", mock_logger_hc.error.call_args[0][0])
-
-
-    @patch('scripts.high_current.logger')
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('scripts.high_current.Path.mkdir') # Mock mkdir as it's called before open
-    @patch('os.environ')
-    def test_generate_json_output_file_saving_error(self, mock_environ, mock_mkdir, mock_file_open, mock_logger_hc):
-        mock_environ.get.return_value = 'false' 
-        mock_file_open.side_effect = IOError("Failed to write")
-
-        sample_data = {'signal_found': True, 'symbol': 'TICK1', 'date': '2023-10-27'}
-        expected_filename = f"daily_signal_2023-10-27.json"
-        # Use the same PROJECT_BASE_DIR as defined at the class/module level for tests
-        expected_filepath = PROJECT_BASE_DIR / "results" / "live_signals" / expected_filename
+        mock_load_hist.assert_called_once()
+        mock_find_setups.assert_called_once_with(STRATEGY_PARAMS)
+        mock_gen_json.assert_called_once_with(complex_data_mock)
         
-        generate_json_output(sample_data)
-
-        mock_mkdir.assert_called_with(parents=True, exist_ok=True)
-        mock_file_open.assert_called_with(expected_filepath, 'w') 
-        mock_logger_hc.error.assert_called_once()
-        self.assertIn(f"IOError saving JSON to file {expected_filepath}", mock_logger_hc.error.call_args[0][0])
-
-
-    # The existing test_find_current_setups_returns_sorted_list is commented out
-    # as find_current_setups's primary return type has changed.
-    # @patch('scripts.high_current.load_symbols')
-    # @patch('scripts.high_current.fetch_stock_data_yf')
-    # def test_find_current_setups_returns_sorted_list(self, mock_fetch_stock_data_yf, mock_load_symbols):
-    #     """Test that find_current_setups returns a list of setups, sorted correctly."""
-    #     # ... (original test code should be adapted or removed) ...
-    #     pass
-
+        expected_calls = [
+            call(mock_overall_signal, "--- Overall Top Selected Trade Candidate for Today ---"),
+            call(mock_segment1_signal, "--- Top Signal for MARKET1 Market ---"),
+            call(mock_segment2_no_signal, "--- Top Signal for MARKET2 Market ---")
+        ]
+        mock_print_details.assert_has_calls(expected_calls, any_order=False)
 
 if __name__ == '__main__':
-    # Ensure logging is not disabled when running file directly for debugging specific tests
-    # logging.disable(logging.NOTSET) 
-    # logging.basicConfig(level=logging.DEBUG) # Or INFO
     unittest.main(argv=['first-arg-is-ignored'], exit=False)
+```
