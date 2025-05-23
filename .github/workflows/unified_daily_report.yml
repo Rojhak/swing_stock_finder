@@ -99,15 +99,15 @@ jobs:
         
     # Fallback email sending method using GitHub Action
     - name: Send email report using GitHub Action (Fallback)
-      if: steps.enhance_report.outputs.report_exists == 'true' && steps.enhance_report.outputs.report_not_empty == 'true' && always()
+      if: steps.enhance_report.outputs.report_exists == 'true' && steps.enhance_report.outputs.report_not_empty == 'true' && always() # Ensure this runs even if primary fails
       uses: dawidd6/action-send-mail@v3
       with:
-        server_address: smtp.gmail.com
-        server_port: 465
-        secure: true
+        server_address: smtp.gmail.com # Hardcoded for Gmail
+        server_port: 587 # Hardcoded for Gmail STARTTLS
+        # 'secure' defaults to false for port 587, action should attempt STARTTLS
         username: ${{ secrets.MAIL_USERNAME }}
         password: ${{ secrets.MAIL_PASSWORD }}
-        subject: Daily Trading Signal Report - ${{ env.TODAY_DATE }}
+        subject: Daily Trading Signal Report (Fallback Action Test) - ${{ env.TODAY_DATE }}
         body: file://report.txt
         to: katar.fhm@gmail.com
         from: Rojhak Azadi <${{ secrets.MAIL_USERNAME }}>
