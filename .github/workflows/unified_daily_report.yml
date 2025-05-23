@@ -19,6 +19,15 @@ jobs:
       with:
         python-version: 3.9
 
+    - name: Debug Secret Access
+      run: |
+        echo "--- Debugging Secrets ---"
+        echo "Attempting to access MAIL_HOST directly: '${{ secrets.MAIL_HOST }}'"
+        echo "Attempting to access MAIL_PORT directly: '${{ secrets.MAIL_PORT }}'"
+        echo "Attempting to access MAIL_USERNAME directly: '${{ secrets.MAIL_USERNAME }}'"
+        echo "Is MAIL_PASSWORD set? (True if non-empty): ${{ secrets.MAIL_PASSWORD != '' }}"
+        echo "--- End Debugging Secrets ---"
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
