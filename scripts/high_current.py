@@ -27,6 +27,7 @@ from tqdm import tqdm
 from collections import OrderedDict 
 from typing import Any # Add this import
 from pathlib import Path
+import json # Added for JSON operations
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -159,6 +160,13 @@ def fetch_stock_data_yf(symbol, period=DATA_FETCH_PERIOD):
 def calculate_indicators(df):
     # (This should be the same robust version as in create_historical_performance.py)
     df_indicators = df.copy()
+    
+    # Check for essential raw data columns
+    essential_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+    missing_essential_cols = [col for col in essential_cols if col not in df_indicators.columns]
+    if missing_essential_cols:
+        logger.debug(f"Input DataFrame for indicator calculation is missing essential columns: {missing_essential_cols}. Subsequent calculations may result in NaNs.")
+
     for period in [5, 10, 20, 50, 200]:
         if 'Close' in df_indicators.columns and len(df_indicators['Close']) >= period:
             df_indicators[f'ma{period}'] = df_indicators['Close'].rolling(window=period, min_periods=period).mean()
@@ -219,12 +227,27 @@ def calculate_indicators(df):
 def detect_setup(df, idx=-1):
     # (Identical to the robust version from previous script)
     required_for_any_setup = ['rsi', 'close_vs_open', 'day_thick_line_green', 'ma5', 'ma20', 'ma50', 'ATR']
-    if not all(col in df.columns for col in required_for_any_setup): return False, None, None
+    
+    missing_cols_for_setup = [col for col in required_for_any_setup if col not in df.columns]
+    if missing_cols_for_setup:
+        logger.debug(f"Cannot detect setup; DataFrame is missing required indicator columns: {missing_cols_for_setup}. This might be due to insufficient data for their calculation.")
+        return False, None, None
+        
     effective_idx = len(df) - 1 if idx == -1 else idx
-    if not (1 <= effective_idx < len(df)): return False, None, None 
-    current_values = {col: df[col].iloc[effective_idx] for col in required_for_any_setup if col in df.columns}
-    prev_values = {col: df[col].iloc[effective_idx-1] for col in required_for_any_setup if col in df.columns}
-    if any(pd.isna(v) for v in current_values.values()) or any(pd.isna(v) for v in prev_values.values()): return False, None, None
+    if not (1 <= effective_idx < len(df)): 
+        logger.debug(f"Cannot detect setup; effective_idx {effective_idx} is out of bounds for DataFrame of length {len(df)}.")
+        return False, None, None 
+        
+    current_values = {col: df[col].iloc[effective_idx] for col in required_for_any_setup} # Already checked columns exist
+    prev_values = {col: df[col].iloc[effective_idx-1] for col in required_for_any_setup} # Assumes effective_idx > 0 which is true if 1 <= effective_idx
+    
+    nan_current = [k for k, v in current_values.items() if pd.isna(v)]
+    nan_prev = [k for k, v in prev_values.items() if pd.isna(v)]
+
+    if nan_current or nan_prev:
+        logger.debug(f"Cannot detect setup; NaN values found in current ({nan_current}) or previous ({nan_prev}) indicator values.")
+        return False, None, None
+        
     setup_detected, setup_type, tier = False, None, None
     current_rsi, prev_rsi = current_values['rsi'], prev_values['rsi']
     current_close_vs_open, current_day_thick_line_green = current_values['close_vs_open'], current_values['day_thick_line_green']
@@ -315,7 +338,53 @@ def find_current_setups(params): # Pass current STRATEGY_PARAMS
     
     # Sort by primary score, then by historical_strength_score for tie-breaking
     potential_setups_today.sort(key=lambda x: (x['score'], x['hist_strength_score']), reverse=True)
-    return potential_setups_today
+
+    if not potential_setups_today:
+        logger.info("No signal found today after scanning all symbols.")
+        return {
+            'signal_found': False,
+            'date': datetime.now().strftime('%Y-%m-%d'),
+            'message': 'No signal found today.'
+        }
+    else:
+        # Select the top signal
+        top_signal_raw = potential_setups_today[0]
+
+        # Handle data type conversions for historical performance
+        hist_strength = top_signal_raw['hist_strength_score']
+        if pd.isna(hist_strength) or hist_strength == -np.inf:
+            hist_strength = None
+
+        hist_win_rate = top_signal_raw['hist_win_rate']
+        if pd.isna(hist_win_rate):
+            hist_win_rate = None
+
+        hist_total_trades = top_signal_raw['hist_total_trades']
+        if pd.isna(hist_total_trades):
+            hist_total_trades = None
+        elif hist_total_trades is not None:
+            hist_total_trades = int(hist_total_trades)
+            
+        # Construct the final signal dictionary
+        final_signal = {
+            'signal_found': True,
+            'date': top_signal_raw['date'].strftime('%Y-%m-%d') if isinstance(top_signal_raw['date'], datetime) else str(top_signal_raw['date']), # Ensure string format
+            'symbol': top_signal_raw['symbol'],
+            'setup_type': top_signal_raw['setup_type'],
+            'tier': top_signal_raw['tier'],
+            'strategy_score': top_signal_raw['score'], # Renamed from 'score'
+            'historical_strength_score': hist_strength,
+            'historical_win_rate': hist_win_rate,
+            'historical_total_trades': hist_total_trades,
+            'latest_close': top_signal_raw['latest_close'],
+            'entry_price': top_signal_raw['entry_price'],
+            'stop_loss_price': top_signal_raw['stop_loss_price'],
+            'target_price': top_signal_raw['target_price'],
+            'risk_reward_ratio': top_signal_raw['risk_reward_ratio'],
+            'atr': top_signal_raw['atr']
+        }
+        logger.info(f"Top signal selected for today: {final_signal['symbol']} with score {final_signal['strategy_score']:.3f}")
+        return final_signal
 
 def print_trade_summary_and_distribution(all_qualified_setups, score_bins):
     # (Identical to previous live scanner)
@@ -336,6 +405,58 @@ def print_trade_summary_and_distribution(all_qualified_setups, score_bins):
     if not has_trades_in_bins: logger.info("  No trades fell into defined score bins.")
     logger.info("--- End of Summary ---")
 
+def generate_json_output(signal_data: dict):
+    """
+    Generates and outputs/saves a JSON representation of the signal_data.
+
+    If running in GitHub Actions (GITHUB_ACTIONS env var is 'true'),
+    prints JSON to stdout. Otherwise, saves to a file in
+    PROJECT_BASE_DIR/results/live_signals/ with filename daily_signal_YYYY-MM-DD.json.
+    """
+    try:
+        json_output = json.dumps(signal_data, indent=4)
+    except TypeError as e:
+        logger.error(f"Error serializing signal_data to JSON: {e}")
+        # If serialization fails, we can't proceed, so return or raise
+        return
+
+    if os.environ.get('GITHUB_ACTIONS') == 'true':
+        logger.info("Printing JSON to stdout for GitHub Action...")
+        print(json_output)
+    else:
+        # Local execution: save to file
+        output_dir_name = "live_signals"
+        output_dir = Path(PROJECT_BASE_DIR) / "results" / output_dir_name
+        
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Ensure date is available and in correct format for filename
+            signal_date_str = signal_data.get('date')
+            if not signal_date_str or not isinstance(signal_date_str, str):
+                # Fallback to current date if not available or not a string, though it should be.
+                logger.warning("Signal date missing or not a string in signal_data; using current date for filename.")
+                signal_date_str = datetime.now().strftime('%Y-%m-%d')
+
+            # Validate date format if necessary, assuming YYYY-MM-DD from find_current_setups
+            try:
+                datetime.strptime(signal_date_str, '%Y-%m-%d') # Validates format
+            except ValueError:
+                logger.error(f"Invalid date format '{signal_date_str}' in signal_data. Using current date for filename.")
+                signal_date_str = datetime.now().strftime('%Y-%m-%d')
+
+            filename = f"daily_signal_{signal_date_str}.json"
+            filepath = output_dir / filename
+            
+            with open(filepath, 'w') as f:
+                f.write(json_output)
+            logger.info(f"Saving JSON to file: {filepath}")
+            
+        except IOError as e:
+            logger.error(f"IOError saving JSON to file {filepath}: {e}")
+        except Exception as e: # Catch other potential errors during file operations
+            logger.error(f"Unexpected error saving JSON to file {filepath}: {e}")
+
 def main():
     logger.info("Starting High Probability Live Signal Generator (Refined)...")
     
@@ -344,39 +465,65 @@ def main():
     # `create_dummy_ticker_files()` is not needed if ticker files are managed externally
     # If you want it for first-time setup, ensure paths in it are also correct.
     
-    all_potential_signals_today = find_current_setups(STRATEGY_PARAMS) # Pass current params
+    # Step 1: Find Signal
+    signal_data = find_current_setups(STRATEGY_PARAMS) # This returns the dictionary
     
-    print_trade_summary_and_distribution(all_potential_signals_today, SCORE_BINS)
+    # Step 2: Generate JSON Output
+    # This function handles printing to stdout for GHA or saving to file for local.
+    generate_json_output(signal_data) 
 
-    if all_potential_signals_today:
-        # --- MODIFIED: Select only the top 1 trade for the day ---
-        final_trade_for_today = all_potential_signals_today[:1] 
-        logger.info(f"\n--- Top Selected Trade Candidate for Today (Max 1) ---")
+    # Step 3: Produce Human-Readable Console Output
+    if signal_data['signal_found']:
+        # Using 'trade' as a shorthand for signal_data for clarity in this block, similar to previous version
+        trade = signal_data 
+        logger.info(f"\n--- Top Selected Trade Candidate for Today ---") # Log message
+        # Print details to console
+        print(f"\nTrade Details:")
+        print(f"  Symbol: {trade['symbol']}")
+        # Date is already formatted as string "YYYY-MM-DD" by find_current_setups
+        print(f"  Date: {trade['date']}")
+        print(f"  Setup Type: {trade['setup_type']} (Tier: {trade['tier']})")
+        print(f"  Strategy Score: {trade['strategy_score']:.3f}")
 
-        for i, trade in enumerate(final_trade_for_today, start=1):
-            print(f"\nTrade {i}:")
-            print(f"  Symbol: {trade['symbol']}")
-            print(f"  Date: {trade['date']}")
-            print(f"  Setup Type: {trade['setup_type']} (Tier: {trade['tier']})")
-            print(f"  Strategy Score: {trade['score']:.3f}")
-            if pd.notna(trade['hist_strength_score']) and trade['hist_strength_score'] > -np.inf:
-                print(f"  Historical Strength: {trade['hist_strength_score']:.2f} (Win Rate: {trade['hist_win_rate']:.2%}, Trades: {int(trade['hist_total_trades'])})")
-            else:
-                print(f"  Historical Strength: N/A")
-            print(f"  Current Close: {trade['latest_close']:.2f}")
-            print(f"  Potential Entry: ~{trade['entry_price']:.2f}")
-            print(f"  Potential Stop-Loss: {trade['stop_loss_price']:.2f}")
+        hist_strength = trade['historical_strength_score']
+        hist_win_rate = trade['historical_win_rate']
+        hist_trades = trade['historical_total_trades']
+
+        if hist_strength is not None and hist_win_rate is not None and hist_trades is not None:
+            # Ensure hist_win_rate is treated as a proportion for formatting, if it's not already.
+            # Assuming it is (e.g., 0.75 for 75%), then .2% formatting works.
+            print(f"  Historical Strength: {hist_strength:.2f} (Win Rate: {hist_win_rate:.2%}, Trades: {hist_trades})")
+        else:
+            # Clarified N/A message based on which specific historical data might be missing
+            na_details = []
+            if hist_strength is None: na_details.append("Strength=N/A")
+            if hist_win_rate is None: na_details.append("WinRate=N/A")
+            if hist_trades is None: na_details.append("Trades=N/A")
+            print(f"  Historical Strength: N/A ({', '.join(na_details)})")
+            
+        print(f"  Current Close: {trade['latest_close']:.2f}")
+        print(f"  Potential Entry: ~{trade['entry_price']:.2f}")
+        print(f"  Potential Stop-Loss: {trade['stop_loss_price']:.2f}")
         print(f"  Potential Target: {trade['target_price']:.2f}")
         print(f"  Potential R:R: {trade['risk_reward_ratio']:.2f}")
         print(f"  ATR: {trade['atr']:.3f}")
 
+        # Note for user
         logger.info("\nNote: Weekly trade limit (e.g., max 3) should be managed by the user based on daily signals.")
             
     else:
-        logger.info("No trade candidates met the refined criteria for today.")
+        # Log message if no signal found
+        logger.info(f"No trade candidates met the refined criteria for today. Message: {signal_data.get('message', 'N/A')}")
             
+    # Step 4: Logging and Final Messages (already in place)
     logger.info("\nLive Signal Generator finished.")
     logger.info("Disclaimer: This is NOT financial advice. Data from yfinance can have delays. Always do your own research.")
 
 if __name__ == "__main__":
+    # The example call to find_current_setups and json.dumps is removed from the active main execution path.
+    # It can be kept commented out for debugging purposes if desired.
+    # # Example: To see the output of find_current_setups directly for testing
+    # # result = find_current_setups(STRATEGY_PARAMS)
+    # # import json
+    # # print(json.dumps(result, indent=4, default=str)) # Print the dict
     main()
