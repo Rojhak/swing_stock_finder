@@ -107,39 +107,92 @@ def load_long_term_historical_stats():
 # Ensure these are robust and match the logic used in your backtests if you want consistency.
 
 def load_symbols():
-    all_symbols = set() 
+    all_symbols_by_market = {} # Initialize dictionary to store symbols by market
+
     for market, filename in TICKER_FILES.items():
+        market_symbols = set() # Use a set for uniqueness within the market before converting to list
         loaded_from_file = False
+        
         try:
             if os.path.exists(filename):
                 df_tickers = pd.read_csv(filename, header=0)
                 symbols_from_file_list = []
-                df_cols_lower = [str(col).lower() for col in df_tickers.columns]
-                if 'symbol' in df_cols_lower:
-                    symbol_col_name = df_tickers.columns[df_cols_lower.index('symbol')]
-                    symbols_from_file_list = df_tickers[symbol_col_name].tolist()
-                elif not df_tickers.empty: symbols_from_file_list = df_tickers.iloc[:, 0].tolist()
+                if not df_tickers.empty:
+                    df_cols_lower = [str(col).lower() for col in df_tickers.columns]
+                    if 'symbol' in df_cols_lower:
+                        symbol_col_name = df_tickers.columns[df_cols_lower.index('symbol')]
+                        symbols_from_file_list = df_tickers[symbol_col_name].tolist()
+                    else: # Use first column if 'symbol' not found
+                        symbols_from_file_list = df_tickers.iloc[:, 0].tolist()
                 
-                market_symbols_from_file = [str(s).strip() for s in symbols_from_file_list if isinstance(s, (str, float, int)) and str(s).strip()]
-                if market_symbols_from_file:
-                    logger.info(f"Loaded {len(market_symbols_from_file)} {market.upper()} symbols from {filename}")
-                    all_symbols.update(market_symbols_from_file); loaded_from_file = True
-                else: logger.warning(f"{market.upper()} tickers file '{filename}' was present but empty/malformed.")
-            else: logger.info(f"{market.upper()} tickers file '{filename}' not found.")
-            if not loaded_from_file: 
+                # Clean and filter symbols from the file list
+                current_file_symbols = {str(s).strip() for s in symbols_from_file_list if isinstance(s, (str, float, int)) and str(s).strip()}
+                
+                if current_file_symbols:
+                    logger.info(f"Loaded {len(current_file_symbols)} symbols for {market.upper()} market from {filename}")
+                    market_symbols.update(current_file_symbols)
+                    loaded_from_file = True
+                else:
+                    logger.warning(f"{market.upper()} tickers file '{filename}' was present but empty or contained no valid symbols.")
+            else:
+                logger.info(f"{market.upper()} tickers file '{filename}' not found.")
+
+            # Fallback to default symbols if no symbols were loaded from file
+            if not loaded_from_file:
                 logger.info(f"Attempting to use default list for {market.upper()} symbols.")
-                market_symbols_from_default = DEFAULT_SYMBOLS.get(market, [])
-                if market_symbols_from_default:
-                    logger.info(f"Using {len(market_symbols_from_default)} default {market.upper()} symbols.")
-                    all_symbols.update(market_symbols_from_default)
-                else: logger.warning(f"No default symbols for {market.upper()}.")
+                default_market_symbols = DEFAULT_SYMBOLS.get(market, [])
+                # Clean and filter default symbols
+                cleaned_default_symbols = {str(s).strip() for s in default_market_symbols if isinstance(s, (str, float, int)) and str(s).strip()}
+
+                if cleaned_default_symbols:
+                    logger.info(f"Using {len(cleaned_default_symbols)} default symbols for {market.upper()} market.")
+                    market_symbols.update(cleaned_default_symbols)
+                else:
+                    logger.warning(f"No default symbols found or provided for {market.upper()} market.")
+        
+        except pd.errors.EmptyDataError:
+            logger.warning(f"Pandas EmptyDataError: {market.upper()} tickers file '{filename}' is empty. Trying defaults.")
+            # Fallback logic is already part of the "if not loaded_from_file" block,
+            # but explicitly catching helps identify this specific pandas error.
+            # Ensure fallback is attempted if this specific error occurs.
+            if not loaded_from_file: # Redundant if already handled, but safe.
+                default_market_symbols = DEFAULT_SYMBOLS.get(market, [])
+                cleaned_default_symbols = {str(s).strip() for s in default_market_symbols if isinstance(s, (str, float, int)) and str(s).strip()}
+                if cleaned_default_symbols:
+                    logger.info(f"Using {len(cleaned_default_symbols)} default symbols for {market.upper()} market due to EmptyDataError.")
+                    market_symbols.update(cleaned_default_symbols)
+                else:
+                    logger.warning(f"No default symbols found for {market.upper()} market after EmptyDataError.")
+
         except Exception as e:
-            logger.error(f"Error processing {market.upper()} symbols (file: {filename}): {e}. Using defaults if available.")
-            market_symbols_from_default = DEFAULT_SYMBOLS.get(market, [])
-            if market_symbols_from_default: all_symbols.update(market_symbols_from_default)
-    if not all_symbols: logger.error("CRITICAL: No symbols loaded. Exiting."); return []
-    logger.info(f"Total unique symbols to scan: {len(all_symbols)}")
-    return list(all_symbols)
+            logger.error(f"Error processing {market.upper()} symbols (file: {filename}): {e}. Attempting to use defaults if available.")
+            # Fallback to default symbols in case of any other error during file processing
+            if not loaded_from_file: # Ensure this runs if file load failed partway
+                default_market_symbols = DEFAULT_SYMBOLS.get(market, [])
+                cleaned_default_symbols = {str(s).strip() for s in default_market_symbols if isinstance(s, (str, float, int)) and str(s).strip()}
+                if cleaned_default_symbols:
+                    logger.info(f"Using {len(cleaned_default_symbols)} default symbols for {market.upper()} market due to error: {e}.")
+                    market_symbols.update(cleaned_default_symbols)
+                else:
+                    logger.warning(f"No default symbols found for {market.upper()} market after error: {e}.")
+        
+        all_symbols_by_market[market] = sorted(list(market_symbols)) # Store sorted list of unique symbols for the market
+        if not all_symbols_by_market[market]:
+             logger.warning(f"No symbols loaded for {market.upper()} market (neither from file nor defaults).")
+
+
+    # Check if any symbols were loaded at all across all markets
+    total_symbols_loaded = sum(len(symbols) for symbols in all_symbols_by_market.values())
+    if total_symbols_loaded == 0:
+        logger.error("CRITICAL: No symbols loaded across any market segments. Exiting or returning empty structure.")
+        # Depending on desired behavior, could exit or just return the empty all_symbols_by_market
+        return all_symbols_by_market # Returns dict with empty lists per market
+
+    logger.info(f"Symbol loading complete. Markets processed: {list(all_symbols_by_market.keys())}")
+    for market, symbols in all_symbols_by_market.items():
+        logger.info(f"  {market.upper()}: {len(symbols)} symbols loaded.")
+        
+    return all_symbols_by_market
 
 def fetch_stock_data_yf(symbol, period=DATA_FETCH_PERIOD):
     try:
@@ -299,92 +352,183 @@ def apply_high_probability_filter_live(potential_trade, setup_type, tier, params
         return False, normalized_score
     return True, normalized_score
 
-def find_current_setups(params): # Pass current STRATEGY_PARAMS
-    logger.info("Scanning for current high probability setups...")
-    symbols_to_scan = load_symbols()
-    if not symbols_to_scan: return []
-    
-    potential_setups_today = []
-    for symbol in tqdm(symbols_to_scan, desc="Scanning Symbols for Live Signals"):
-        df_raw = fetch_stock_data_yf(symbol, period=DATA_FETCH_PERIOD) # Use DATA_FETCH_PERIOD
-        if df_raw is None: continue
-        df_indicators = calculate_indicators(df_raw)
-        if df_indicators is None or df_indicators.empty or len(df_indicators) < params['min_data_days'] or pd.isna(df_indicators['Close'].iloc[-1]):
-            logger.debug(f"Insufficient/invalid indicator data for {symbol}.") # Changed to debug
-            continue
-        setup_detected, setup_type, tier = detect_setup(df_indicators, idx=-1)
-        if setup_detected:
-            trade_params = calculate_potential_trade_params(df_indicators, entry_idx=-1)
-            if trade_params is None: continue
-            passes_filter, score = apply_high_probability_filter_live(trade_params, setup_type, tier, params) # Pass params
-            if passes_filter:
-                setup_info = {
-                    'symbol': symbol, 'date': df_indicators.index[-1].date(), 'setup_type': setup_type, 'tier': tier,
-                    'score': score, 'entry_price': trade_params['entry_price'], 
-                    'stop_loss_price': trade_params['stop_loss_price'], 'target_price': trade_params['target_price'],
-                    'risk_reward_ratio': trade_params['risk_reward_ratio'], 'atr': trade_params['atr'],
-                    'latest_close': df_indicators['Close'].iloc[-1],
-                    'hist_strength_score': -np.inf, 'hist_win_rate': 0.0, 'hist_total_trades': 0
-                }
-                if long_term_historical_perf_df is not None and not long_term_historical_perf_df.empty:
-                    symbol_hist_data = long_term_historical_perf_df[long_term_historical_perf_df['symbol'] == symbol]
-                    if not symbol_hist_data.empty:
-                        setup_info['hist_strength_score'] = symbol_hist_data['hist_strength_score'].iloc[0]
-                        setup_info['hist_win_rate'] = symbol_hist_data['hist_win_rate'].iloc[0]
-                        setup_info['hist_total_trades'] = symbol_hist_data['hist_total_trades'].iloc[0]
-                potential_setups_today.append(setup_info)
-                logger.debug(f"  Potentially QUALIFIED: {symbol} | Score: {score:.3f} | Hist Str: {setup_info['hist_strength_score']:.2f}")
-            else: logger.debug(f"  FILTERED OUT (Live): {symbol} | Score: {score:.3f} | Setup: {setup_type}")
-    
-    # Sort by primary score, then by historical_strength_score for tie-breaking
-    potential_setups_today.sort(key=lambda x: (x['score'], x['hist_strength_score']), reverse=True)
-
-    if not potential_setups_today:
-        logger.info("No signal found today after scanning all symbols.")
+# --- Helper function for formatting signal output ---
+def _format_signal_output(raw_signal_data: dict, market_segment_name: str, signal_found: bool = True) -> dict:
+    """
+    Formats a raw signal data dictionary into the standard output structure.
+    Handles NaN/inf conversion, date formatting, key renaming, and adds market segment.
+    """
+    if not signal_found: # Handles "no signal found" cases for segments or overall
+        current_date_str = datetime.now().strftime('%Y-%m-%d')
+        message = raw_signal_data.get('message', f'No signal found today for {market_segment_name} market.')
         return {
             'signal_found': False,
-            'date': datetime.now().strftime('%Y-%m-%d'),
-            'message': 'No signal found today.'
+            'date': current_date_str,
+            'market_segment': market_segment_name,
+            'message': message
         }
-    else:
-        # Select the top signal
-        top_signal_raw = potential_setups_today[0]
 
-        # Handle data type conversions for historical performance
-        hist_strength = top_signal_raw['hist_strength_score']
-        if pd.isna(hist_strength) or hist_strength == -np.inf:
-            hist_strength = None
+    # Handle data type conversions for historical performance
+    hist_strength = raw_signal_data.get('hist_strength_score')
+    if pd.isna(hist_strength) or hist_strength == -np.inf:
+        hist_strength = None
 
-        hist_win_rate = top_signal_raw['hist_win_rate']
-        if pd.isna(hist_win_rate):
-            hist_win_rate = None
+    hist_win_rate = raw_signal_data.get('hist_win_rate')
+    if pd.isna(hist_win_rate):
+        hist_win_rate = None
 
-        hist_total_trades = top_signal_raw['hist_total_trades']
-        if pd.isna(hist_total_trades):
-            hist_total_trades = None
-        elif hist_total_trades is not None:
+    hist_total_trades = raw_signal_data.get('hist_total_trades')
+    if pd.isna(hist_total_trades):
+        hist_total_trades = None
+    elif hist_total_trades is not None:
+        try:
             hist_total_trades = int(hist_total_trades)
+        except (ValueError, TypeError):
+            logger.warning(f"Could not convert hist_total_trades '{hist_total_trades}' to int for symbol {raw_signal_data.get('symbol')}. Setting to None.")
+            hist_total_trades = None
             
-        # Construct the final signal dictionary
-        final_signal = {
-            'signal_found': True,
-            'date': top_signal_raw['date'].strftime('%Y-%m-%d') if isinstance(top_signal_raw['date'], datetime) else str(top_signal_raw['date']), # Ensure string format
-            'symbol': top_signal_raw['symbol'],
-            'setup_type': top_signal_raw['setup_type'],
-            'tier': top_signal_raw['tier'],
-            'strategy_score': top_signal_raw['score'], # Renamed from 'score'
-            'historical_strength_score': hist_strength,
-            'historical_win_rate': hist_win_rate,
-            'historical_total_trades': hist_total_trades,
-            'latest_close': top_signal_raw['latest_close'],
-            'entry_price': top_signal_raw['entry_price'],
-            'stop_loss_price': top_signal_raw['stop_loss_price'],
-            'target_price': top_signal_raw['target_price'],
-            'risk_reward_ratio': top_signal_raw['risk_reward_ratio'],
-            'atr': top_signal_raw['atr']
+    # Format date: raw_signal_data['date'] is datetime.date object
+    signal_date_str = raw_signal_data['date'].strftime('%Y-%m-%d') if isinstance(raw_signal_data.get('date'), datetime) or isinstance(raw_signal_data.get('date'), pd.Timestamp) or hasattr(raw_signal_data.get('date'), 'strftime') else str(raw_signal_data.get('date'))
+
+
+    formatted_signal = {
+        'signal_found': True,
+        'date': signal_date_str,
+        'market_segment': market_segment_name,
+        'symbol': raw_signal_data['symbol'],
+        'setup_type': raw_signal_data['setup_type'],
+        'tier': raw_signal_data['tier'],
+        'strategy_score': raw_signal_data['score'],  # Renamed from 'score'
+        'historical_strength_score': hist_strength,
+        'historical_win_rate': hist_win_rate,
+        'historical_total_trades': hist_total_trades,
+        'latest_close': raw_signal_data['latest_close'],
+        'entry_price': raw_signal_data['entry_price'],
+        'stop_loss_price': raw_signal_data['stop_loss_price'],
+        'target_price': raw_signal_data['target_price'],
+        'risk_reward_ratio': raw_signal_data['risk_reward_ratio'],
+        'atr': raw_signal_data['atr']
+    }
+    return formatted_signal
+
+
+def find_current_setups(params): # Pass current STRATEGY_PARAMS
+    logger.info("Starting market scan for high probability setups...")
+    symbols_by_market = load_symbols() # Returns a dictionary {'market': [symbols]}
+    all_qualified_setups_with_market = [] # Store all setups found, including their market segment
+
+    # Check if any symbols were loaded at all
+    if not symbols_by_market or all(not symbols for symbols in symbols_by_market.values()):
+        logger.error("No symbols loaded from any market to scan.")
+        current_date_str = datetime.now().strftime('%Y-%m-%d')
+        no_signal_overall = {
+            'signal_found': False, 'date': current_date_str, 
+            'message': 'No symbols loaded to scan.'
         }
-        logger.info(f"Top signal selected for today: {final_signal['symbol']} with score {final_signal['strategy_score']:.3f}")
-        return final_signal
+        # For segmented_signals, create a "no symbols loaded" message for each expected market
+        segmented_no_signals = {}
+        for market_key in TICKER_FILES.keys(): # Use TICKER_FILES keys as the definitive list of expected markets
+             segmented_no_signals[market_key] = {
+                'signal_found': False, 'date': current_date_str, 
+                'market_segment': market_key, 
+                'message': f'No symbols loaded to scan for {market_key} market.'
+            }
+        return {'overall_top_signal': no_signal_overall, 'segmented_signals': segmented_no_signals}
+
+    for market_segment, symbols_list in symbols_by_market.items():
+        if not symbols_list:
+            logger.info(f"No symbols to scan for {market_segment} market segment.")
+            continue # Skip to the next market segment
+
+        logger.info(f"Scanning {len(symbols_list)} symbols for {market_segment.upper()} market...")
+        for symbol in tqdm(symbols_list, desc=f"Scanning {market_segment.upper()}"):
+            df_raw = fetch_stock_data_yf(symbol, period=DATA_FETCH_PERIOD)
+            if df_raw is None: continue
+            
+            df_indicators = calculate_indicators(df_raw)
+            if df_indicators is None or df_indicators.empty or \
+               len(df_indicators) < params['min_data_days'] or \
+               pd.isna(df_indicators['Close'].iloc[-1]):
+                logger.debug(f"Insufficient/invalid indicator data for {symbol} in {market_segment}.")
+                continue
+                
+            setup_detected, setup_type, tier = detect_setup(df_indicators, idx=-1)
+            if setup_detected:
+                trade_params = calculate_potential_trade_params(df_indicators, entry_idx=-1)
+                if trade_params is None: continue
+                
+                passes_filter, score = apply_high_probability_filter_live(trade_params, setup_type, tier, params)
+                if passes_filter:
+                    setup_info = {
+                        'symbol': symbol,
+                        'date': df_indicators.index[-1].date(), # This is a datetime.date object
+                        'setup_type': setup_type,
+                        'tier': tier,
+                        'score': score, # Will be renamed to strategy_score by _format_signal_output
+                        'market_segment': market_segment, # Add market segment
+                        **trade_params, # Merge trade parameters
+                        'latest_close': df_indicators['Close'].iloc[-1],
+                        'hist_strength_score': -np.inf, # Default, will be updated
+                        'hist_win_rate': 0.0,          # Default, will be updated
+                        'hist_total_trades': 0         # Default, will be updated
+                    }
+                    
+                    if long_term_historical_perf_df is not None and not long_term_historical_perf_df.empty:
+                        symbol_hist_data = long_term_historical_perf_df[long_term_historical_perf_df['symbol'] == symbol]
+                        if not symbol_hist_data.empty:
+                            setup_info['hist_strength_score'] = symbol_hist_data['hist_strength_score'].iloc[0]
+                            setup_info['hist_win_rate'] = symbol_hist_data['hist_win_rate'].iloc[0]
+                            setup_info['hist_total_trades'] = symbol_hist_data['hist_total_trades'].iloc[0]
+                    
+                    all_qualified_setups_with_market.append(setup_info)
+                    logger.debug(f"  Potentially QUALIFIED: {symbol} ({market_segment}) | Score: {score:.3f}")
+                else:
+                    logger.debug(f"  FILTERED OUT (Live): {symbol} ({market_segment}) | Score: {score:.3f}")
+
+    # --- Signal Identification ---
+    overall_top_signal_dict = {}
+    segmented_signals_dict = {}
+    
+    # Define sort key
+    sort_key = lambda x: (x['score'], x.get('hist_strength_score', -np.inf)) # hist_strength_score might be NaN
+
+    # Overall Top Signal
+    if all_qualified_setups_with_market:
+        all_qualified_setups_with_market.sort(key=sort_key, reverse=True)
+        overall_top_signal_raw = all_qualified_setups_with_market[0]
+        overall_top_signal_dict = _format_signal_output(overall_top_signal_raw, overall_top_signal_raw['market_segment'])
+        logger.info(f"Overall top signal: {overall_top_signal_dict['symbol']} from {overall_top_signal_dict['market_segment']} market "
+                    f"with score {overall_top_signal_dict['strategy_score']:.3f}")
+    else:
+        logger.info("No signals found today across any market.")
+        overall_top_signal_dict = _format_signal_output(
+            raw_signal_data={'message': 'No signals found today across any market.'},
+            market_segment_name='overall', # Or None, or a specific placeholder
+            signal_found=False
+        )
+        # Ensure the 'overall' market_segment is more generic if no signal found
+        overall_top_signal_dict['market_segment'] = 'N/A' # Or remove if not applicable to "no overall signal"
+
+    # Per-Segment Top Signals
+    # Iterate through all market segments defined in TICKER_FILES to ensure all are represented
+    for segment_key in TICKER_FILES.keys():
+        segment_setups = [s for s in all_qualified_setups_with_market if s['market_segment'] == segment_key]
+        if segment_setups:
+            segment_setups.sort(key=sort_key, reverse=True)
+            top_signal_for_segment_raw = segment_setups[0]
+            formatted_segment_signal = _format_signal_output(top_signal_for_segment_raw, segment_key)
+            segmented_signals_dict[segment_key] = formatted_segment_signal
+            logger.info(f"Top signal for {segment_key.upper()} market: {formatted_segment_signal['symbol']} "
+                        f"with score {formatted_segment_signal['strategy_score']:.3f}")
+        else:
+            logger.info(f"No signal found today for {segment_key.upper()} market.")
+            segmented_signals_dict[segment_key] = _format_signal_output(
+                raw_signal_data={'message': f'No signal found today for {segment_key} market.'},
+                market_segment_name=segment_key,
+                signal_found=False
+            )
+            
+    return {'overall_top_signal': overall_top_signal_dict, 'segmented_signals': segmented_signals_dict}
 
 def print_trade_summary_and_distribution(all_qualified_setups, score_bins):
     # (Identical to previous live scanner)
@@ -405,23 +549,24 @@ def print_trade_summary_and_distribution(all_qualified_setups, score_bins):
     if not has_trades_in_bins: logger.info("  No trades fell into defined score bins.")
     logger.info("--- End of Summary ---")
 
-def generate_json_output(signal_data: dict):
+def generate_json_output(signal_data_complex: dict):
     """
-    Generates and outputs/saves a JSON representation of the signal_data.
+    Generates and outputs/saves a JSON representation of the complex signal data
+    (overall and segmented signals).
 
     If running in GitHub Actions (GITHUB_ACTIONS env var is 'true'),
     prints JSON to stdout. Otherwise, saves to a file in
     PROJECT_BASE_DIR/results/live_signals/ with filename daily_signal_YYYY-MM-DD.json.
     """
     try:
-        json_output = json.dumps(signal_data, indent=4)
+        # Serialize the entire complex dictionary
+        json_output = json.dumps(signal_data_complex, indent=4)
     except TypeError as e:
-        logger.error(f"Error serializing signal_data to JSON: {e}")
-        # If serialization fails, we can't proceed, so return or raise
+        logger.error(f"Error serializing complex signal data to JSON: {e}")
         return
 
     if os.environ.get('GITHUB_ACTIONS') == 'true':
-        logger.info("Printing JSON to stdout for GitHub Action...")
+        logger.info("Printing complex signal data (overall and segmented) to stdout for GitHub Action...")
         print(json_output)
     else:
         # Local execution: save to file
@@ -431,18 +576,28 @@ def generate_json_output(signal_data: dict):
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
             
-            # Ensure date is available and in correct format for filename
-            signal_date_str = signal_data.get('date')
-            if not signal_date_str or not isinstance(signal_date_str, str):
-                # Fallback to current date if not available or not a string, though it should be.
-                logger.warning("Signal date missing or not a string in signal_data; using current date for filename.")
+            # Determine date for filename from the complex data structure
+            signal_date_str = None
+            overall_signal = signal_data_complex.get('overall_top_signal', {})
+            
+            if overall_signal.get('signal_found') and isinstance(overall_signal.get('date'), str):
+                signal_date_str = overall_signal['date']
+            else: # Try segmented signals if overall doesn't have a valid date
+                segmented_signals = signal_data_complex.get('segmented_signals', {})
+                for market_data in segmented_signals.values():
+                    if market_data.get('signal_found') and isinstance(market_data.get('date'), str):
+                        signal_date_str = market_data['date']
+                        break # Found a date from a segmented signal
+            
+            if not signal_date_str: # Fallback to current date
+                logger.warning("Could not determine signal date from overall or segmented signals; using current date for filename.")
                 signal_date_str = datetime.now().strftime('%Y-%m-%d')
 
-            # Validate date format if necessary, assuming YYYY-MM-DD from find_current_setups
+            # Validate the determined date format
             try:
                 datetime.strptime(signal_date_str, '%Y-%m-%d') # Validates format
             except ValueError:
-                logger.error(f"Invalid date format '{signal_date_str}' in signal_data. Using current date for filename.")
+                logger.error(f"Invalid date format '{signal_date_str}' determined for filename. Using current date as fallback.")
                 signal_date_str = datetime.now().strftime('%Y-%m-%d')
 
             filename = f"daily_signal_{signal_date_str}.json"
@@ -450,12 +605,12 @@ def generate_json_output(signal_data: dict):
             
             with open(filepath, 'w') as f:
                 f.write(json_output)
-            logger.info(f"Saving JSON to file: {filepath}")
+            logger.info(f"Saving complex signal data (overall and segmented) to file: {filepath}")
             
         except IOError as e:
             logger.error(f"IOError saving JSON to file {filepath}: {e}")
-        except Exception as e: # Catch other potential errors during file operations
-            logger.error(f"Unexpected error saving JSON to file {filepath}: {e}")
+        except Exception as e: 
+            logger.error(f"Unexpected error saving JSON to file {filepath if 'filepath' in locals() else 'unknown'}: {e}")
 
 def main():
     logger.info("Starting High Probability Live Signal Generator (Refined)...")
@@ -469,55 +624,100 @@ def main():
     signal_data = find_current_setups(STRATEGY_PARAMS) # This returns the dictionary
     
     # Step 2: Generate JSON Output
-    # This function handles printing to stdout for GHA or saving to file for local.
-    generate_json_output(signal_data) 
+    generate_json_output(signal_data) # signal_data here is the complex_signal_data
 
     # Step 3: Produce Human-Readable Console Output
-    if signal_data['signal_found']:
-        # Using 'trade' as a shorthand for signal_data for clarity in this block, similar to previous version
-        trade = signal_data 
-        logger.info(f"\n--- Top Selected Trade Candidate for Today ---") # Log message
-        # Print details to console
-        print(f"\nTrade Details:")
-        print(f"  Symbol: {trade['symbol']}")
-        # Date is already formatted as string "YYYY-MM-DD" by find_current_setups
-        print(f"  Date: {trade['date']}")
-        print(f"  Setup Type: {trade['setup_type']} (Tier: {trade['tier']})")
-        print(f"  Strategy Score: {trade['strategy_score']:.3f}")
+    logger.info("Generating human-readable console output...")
+    _print_signal_details_to_console(
+        signal_data.get('overall_top_signal', {}),
+        "--- Overall Top Selected Trade Candidate for Today ---"
+    )
 
-        hist_strength = trade['historical_strength_score']
-        hist_win_rate = trade['historical_win_rate']
-        hist_trades = trade['historical_total_trades']
+    print("\n\n--- Per-Segment Top Signal Summary ---") # Use print for console separation
+    logger.info("Generating per-segment console output...")
+    segmented_signals = signal_data.get('segmented_signals', {})
+    if segmented_signals:
+        for market_name, segment_signal_data in segmented_signals.items():
+            _print_signal_details_to_console(
+                segment_signal_data,
+                f"--- Top Signal for {market_name.upper()} Market ---"
+            )
+    else:
+        print("No per-segment signal data available.")
+        logger.info("No per-segment signal data was available to print.")
+
+    # Note for user, if an overall signal was found
+    overall_signal = signal_data.get('overall_top_signal', {})
+    if overall_signal.get('signal_found'):
+         logger.info("\nNote: Weekly trade limit (e.g., max 3) should be managed by the user based on daily signals.")
+            
+    logger.info("\nLive Signal Generator finished.")
+    logger.info("Disclaimer: This is NOT financial advice. Data from yfinance can have delays. Always do your own research.")
+
+# --- Helper for console printing ---
+def _print_signal_details_to_console(signal_dict: dict, signal_title: str):
+    """
+    Prints the details of a single signal dictionary (overall or segmented) to the console.
+    """
+    logger.debug(f"Printing details to console: '{signal_title}'")
+    print(f"\n{signal_title}") # Use print for console output
+
+    if not signal_dict: # Handle cases where the signal_dict itself might be empty
+        print("  No signal data provided for this section.")
+        return
+
+    if signal_dict.get('signal_found'):
+        # Market segment for overall signal might be 'N/A' if no signals found at all,
+        # or the actual market if a signal was found.
+        market_segment_info = ""
+        if 'market_segment' in signal_dict and signal_dict['market_segment'] != 'N/A' and "Overall" in signal_title:
+             market_segment_info = f" (Market: {signal_dict['market_segment']})"
+        
+        print(f"  Symbol: {signal_dict.get('symbol', 'N/A')}{market_segment_info}")
+        print(f"  Date: {signal_dict.get('date', 'N/A')}")
+        print(f"  Setup Type: {signal_dict.get('setup_type', 'N/A')} (Tier: {signal_dict.get('tier', 'N/A')})")
+        
+        strategy_score = signal_dict.get('strategy_score')
+        if strategy_score is not None:
+            print(f"  Strategy Score: {strategy_score:.3f}")
+        else:
+            print(f"  Strategy Score: N/A")
+
+        hist_strength = signal_dict.get('historical_strength_score')
+        hist_win_rate = signal_dict.get('historical_win_rate')
+        hist_trades = signal_dict.get('historical_total_trades')
 
         if hist_strength is not None and hist_win_rate is not None and hist_trades is not None:
-            # Ensure hist_win_rate is treated as a proportion for formatting, if it's not already.
-            # Assuming it is (e.g., 0.75 for 75%), then .2% formatting works.
             print(f"  Historical Strength: {hist_strength:.2f} (Win Rate: {hist_win_rate:.2%}, Trades: {hist_trades})")
         else:
-            # Clarified N/A message based on which specific historical data might be missing
             na_details = []
             if hist_strength is None: na_details.append("Strength=N/A")
             if hist_win_rate is None: na_details.append("WinRate=N/A")
             if hist_trades is None: na_details.append("Trades=N/A")
             print(f"  Historical Strength: N/A ({', '.join(na_details)})")
             
-        print(f"  Current Close: {trade['latest_close']:.2f}")
-        print(f"  Potential Entry: ~{trade['entry_price']:.2f}")
-        print(f"  Potential Stop-Loss: {trade['stop_loss_price']:.2f}")
-        print(f"  Potential Target: {trade['target_price']:.2f}")
-        print(f"  Potential R:R: {trade['risk_reward_ratio']:.2f}")
-        print(f"  ATR: {trade['atr']:.3f}")
+        latest_close = signal_dict.get('latest_close')
+        print(f"  Current Close: {latest_close:.2f}" if latest_close is not None else "  Current Close: N/A")
+        
+        entry_price = signal_dict.get('entry_price')
+        print(f"  Potential Entry: ~{entry_price:.2f}" if entry_price is not None else "  Potential Entry: N/A")
 
-        # Note for user
-        logger.info("\nNote: Weekly trade limit (e.g., max 3) should be managed by the user based on daily signals.")
-            
+        sl_price = signal_dict.get('stop_loss_price')
+        print(f"  Potential Stop-Loss: {sl_price:.2f}" if sl_price is not None else "  Potential Stop-Loss: N/A")
+        
+        tp_price = signal_dict.get('target_price')
+        print(f"  Potential Target: {tp_price:.2f}" if tp_price is not None else "  Potential Target: N/A")
+
+        rr_ratio = signal_dict.get('risk_reward_ratio')
+        print(f"  Potential R:R: {rr_ratio:.2f}" if rr_ratio is not None else "  Potential R:R: N/A")
+        
+        atr_val = signal_dict.get('atr')
+        print(f"  ATR: {atr_val:.3f}" if atr_val is not None else "  ATR: N/A")
     else:
-        # Log message if no signal found
-        logger.info(f"No trade candidates met the refined criteria for today. Message: {signal_data.get('message', 'N/A')}")
-            
-    # Step 4: Logging and Final Messages (already in place)
-    logger.info("\nLive Signal Generator finished.")
-    logger.info("Disclaimer: This is NOT financial advice. Data from yfinance can have delays. Always do your own research.")
+        # Print the message for "no signal found" cases
+        # The market_segment is already part of the message from _format_signal_output
+        print(f"  {signal_dict.get('message', 'No signal information available for this section.')}")
+
 
 if __name__ == "__main__":
     # The example call to find_current_setups and json.dumps is removed from the active main execution path.
