@@ -1,0 +1,64 @@
+{
+    "overall_top_signal": {
+        "signal_found": true,
+        "date": "2025-05-20",
+        "market_segment": "sp400",
+        "symbol": "JWN",
+        "setup_type": "VOLUME_SPIKE",
+        "tier": "low",
+        "strategy_score": 0.8666666666666687,
+        "historical_strength_score": 4.6357,
+        "historical_win_rate": 0.804,
+        "historical_total_trades": 842,
+        "latest_close": 24.65999984741211,
+        "entry_price": 24.65999984741211,
+        "stop_loss_price": 24.432320867265975,
+        "target_price": 25.11535780770438,
+        "risk_reward_ratio": 2.0000000000000155,
+        "atr": 0.1517859867640904
+    },
+    "segmented_signals": {
+        "euro": {
+            "signal_found": false,
+            "date": "2025-05-23",
+            "market_segment": "euro",
+            "message": "No signal found today for euro market."
+        },
+        "sp500": {
+            "signal_found": true,
+            "date": "2025-05-22",
+            "market_segment": "sp500",
+            "symbol": "LHX",
+            "setup_type": "VOLUME_SPIKE",
+            "tier": "low",
+            "strategy_score": 0.8666666666666666,
+            "historical_strength_score": 4.5411,
+            "historical_win_rate": 0.8042,
+            "historical_total_trades": 761,
+            "latest_close": 239.19000244140625,
+            "entry_price": 239.19000244140625,
+            "stop_loss_price": 231.57321875435966,
+            "target_price": 254.42356981549943,
+            "risk_reward_ratio": 2.0,
+            "atr": 5.077855791364398
+        },
+        "sp400": {
+            "signal_found": true,
+            "date": "2025-05-20",
+            "market_segment": "sp400",
+            "symbol": "JWN",
+            "setup_type": "VOLUME_SPIKE",
+            "tier": "low",
+            "strategy_score": 0.8666666666666687,
+            "historical_strength_score": 4.6357,
+            "historical_win_rate": 0.804,
+            "historical_total_trades": 842,
+            "latest_close": 24.65999984741211,
+            "entry_price": 24.65999984741211,
+            "stop_loss_price": 24.432320867265975,
+            "target_price": 25.11535780770438,
+            "risk_reward_ratio": 2.0000000000000155,
+            "atr": 0.1517859867640904
+        }
+    }
+}

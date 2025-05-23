@@ -121,6 +121,20 @@ def add_tracked_signal(signal_data: dict) -> Optional[str]:
             logger.error(f"Missing essential data in signal_data for trade {trade_id}. Required: {required_keys}")
             return None
 
+        # Initialize empty row with correct dtypes to avoid FutureWarning
+        # For string columns
+        string_cols = ['trade_id', 'symbol', 'trade_type', 'source_signal_date', 'status', 'exit_reason', 'notes']
+        for col in string_cols:
+            if col in new_row and new_row[col] is not None:
+                new_row[col] = str(new_row[col])
+        
+        # For date columns that should be strings in the CSV
+        date_cols = ['entry_date', 'exit_date']
+        for col in date_cols:
+            if col in new_row and new_row[col] is not None and not pd.isna(new_row[col]):
+                new_row[col] = str(new_row[col])
+        
+        # Append the new row to the DataFrame
         new_row_df = pd.DataFrame([new_row])
         df = pd.concat([df, new_row_df], ignore_index=True)
         
@@ -180,6 +194,20 @@ def add_manual_historical_pick(symbol: str, entry_price: float, stop_loss_price:
             'notes': notes
         }
         
+        # Initialize empty row with correct dtypes to avoid FutureWarning
+        # For string columns
+        string_cols = ['trade_id', 'symbol', 'trade_type', 'status', 'exit_reason', 'notes']
+        for col in string_cols:
+            if col in new_row and new_row[col] is not None:
+                new_row[col] = str(new_row[col])
+        
+        # For date columns that should be strings in the CSV
+        date_cols = ['entry_date', 'exit_date']
+        for col in date_cols:
+            if col in new_row and new_row[col] is not None and not pd.isna(new_row[col]):
+                new_row[col] = str(new_row[col])
+        
+        # Append the new row to the DataFrame
         new_row_df = pd.DataFrame([new_row])
         df = pd.concat([df, new_row_df], ignore_index=True)
         
@@ -290,6 +318,93 @@ def update_active_trades() -> bool:
 
     except Exception as e:
         logger.error(f"Critical error in update_active_trades: {e}")
+        return False
+
+def close_trade(trade_id: str, exit_price: float, exit_reason: str) -> bool:
+    """
+    Closes an active trade by updating its exit details and marking it as closed.
+
+    Args:
+        trade_id (str): The unique ID of the trade to close.
+        exit_price (float): The price at which the trade was closed.
+        exit_reason (str): The reason for closing the trade.
+
+    Returns:
+        bool: True if the trade was successfully closed or was already closed,
+              False if the trade_id was not found.
+    """
+    try:
+        df = _get_trades_df_and_ensure_header()
+        
+        # Check if trade_id exists
+        trade_index = df.index[df['trade_id'] == trade_id]
+        if trade_index.empty:
+            logger.error(f"Trade with ID '{trade_id}' not found in {TRADES_FILE_PATH}")
+            return False
+        
+        trade_index = trade_index[0]  # Get the actual index
+        
+        # Check if already closed
+        if df.loc[trade_index, 'status'] == 'Closed':
+            logger.info(f"Trade {trade_id} is already closed. No changes made.")
+            return True
+        
+        # Get entry details for calculations
+        entry_price_str = df.loc[trade_index, 'entry_price']
+        entry_date_str = df.loc[trade_index, 'entry_date']
+        
+        # Convert entry_price to float for calculations
+        entry_price = pd.to_numeric(entry_price_str, errors='coerce')
+        
+        # Calculate realized P&L (as percentage)
+        realized_pnl = np.nan
+        if pd.notna(entry_price) and entry_price != 0:
+            realized_pnl = ((exit_price - entry_price) / entry_price) * 100
+        
+        # Calculate holding period
+        holding_period = np.nan
+        try:
+            if pd.notna(entry_date_str):
+                entry_date_obj = None
+                if isinstance(entry_date_str, str):
+                    entry_date_obj = datetime.strptime(entry_date_str, '%Y-%m-%d').date()
+                elif isinstance(entry_date_str, pd.Timestamp):
+                    entry_date_obj = entry_date_str.date()
+                elif isinstance(entry_date_str, datetime):
+                    entry_date_obj = entry_date_str.date()
+                
+                if entry_date_obj:
+                    holding_period = (datetime.now().date() - entry_date_obj).days
+        except Exception as e:
+            logger.warning(f"Could not calculate holding period: {e}")
+        
+        # Create a copy of the row to ensure consistent data types
+        trade_data = df.loc[trade_index].copy()
+        
+        # Update string columns with proper type conversion
+        trade_data['status'] = 'Closed'
+        trade_data['exit_date'] = datetime.now().date().isoformat()
+        trade_data['exit_reason'] = exit_reason
+        
+        # Update numeric columns
+        trade_data['exit_price'] = exit_price
+        trade_data['realized_pnl'] = realized_pnl 
+        trade_data['holding_period'] = holding_period
+        
+        # Clear the unrealized P&L
+        trade_data['unrealized_pnl'] = np.nan
+        
+        # Update the row in the DataFrame
+        df.loc[trade_index] = trade_data
+        
+        # Save the updated DataFrame
+        df.to_csv(TRADES_FILE_PATH, index=False)
+        
+        logger.info(f"Successfully closed trade {trade_id} at exit price {exit_price} with reason: '{exit_reason}'")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error closing trade {trade_id}: {e}")
         return False
 
 if __name__ == "__main__":

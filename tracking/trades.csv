@@ -1,1 +1,5 @@
 trade_id,symbol,entry_date,entry_price,stop_loss_price,target_price,risk_reward_ratio,atr_at_entry,trade_type,source_signal_date,status,current_price,unrealized_pnl,exit_date,exit_price,realized_pnl,exit_reason,holding_period,notes
+20250523141041799430,AAPL,2025-05-23,170.5,168.0,175.5,2.0,2.15,Tracked Signal,2025-05-22,Closed,201.36000061035156,,2025-05-23,172.8,1.3489736070381295,Target hit (demo),0.0,Based on strong daily candle
+20250523141041801765,MSFT,2025-05-23,300.0,295.0,310.0,2.0,,Manual Historical Pick,,Active,454.8599853515625,51.62,,,,,0.0,Strong historical performance for Q1 breakouts
+20250523141041802986,GOOGL,2025-05-23,2700.0,2650.0,2800.0,2.0,55.0,Tracked Signal,2025-05-23,Active,170.8699951171875,-93.67,,,,,0.0,AI news catalyst
+20250523142226405440,BBY,2025-05-23,70.76000213623047,67.61428696768624,77.05143247331893,2.0,2.0971434456961497,Tracked Signal,2025-05-22,Active,70.76000213623047,0.0,,,,,0.0,Auto-tracked from sp500 market. Setup: VOLUME_SPIKE. Score: 0.8666666666666666

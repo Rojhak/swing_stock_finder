@@ -1,0 +1,4 @@
+pandas>=1.4.0
+numpy>=1.20.0
+yfinance>=0.1.70
+tqdm>=4.62.0

@@ -1,0 +1,52 @@
+{
+    "overall_top_signal": {
+        "signal_found": true,
+        "date": "2025-05-22",
+        "market_segment": "sp500",
+        "symbol": "BBY",
+        "setup_type": "VOLUME_SPIKE",
+        "tier": "low",
+        "strategy_score": 0.8666666666666666,
+        "historical_strength_score": 4.6173,
+        "historical_win_rate": 0.7891,
+        "historical_total_trades": 811,
+        "latest_close": 70.76000213623047,
+        "entry_price": 70.76000213623047,
+        "stop_loss_price": 67.61428696768624,
+        "target_price": 77.05143247331893,
+        "risk_reward_ratio": 2.0,
+        "atr": 2.0971434456961497
+    },
+    "segmented_signals": {
+        "euro": {
+            "signal_found": false,
+            "date": "2025-05-23",
+            "market_segment": "euro",
+            "message": "No signal found today for euro market."
+        },
+        "sp500": {
+            "signal_found": true,
+            "date": "2025-05-22",
+            "market_segment": "sp500",
+            "symbol": "BBY",
+            "setup_type": "VOLUME_SPIKE",
+            "tier": "low",
+            "strategy_score": 0.8666666666666666,
+            "historical_strength_score": 4.6173,
+            "historical_win_rate": 0.7891,
+            "historical_total_trades": 811,
+            "latest_close": 70.76000213623047,
+            "entry_price": 70.76000213623047,
+            "stop_loss_price": 67.61428696768624,
+            "target_price": 77.05143247331893,
+            "risk_reward_ratio": 2.0,
+            "atr": 2.0971434456961497
+        },
+        "sp400": {
+            "signal_found": false,
+            "date": "2025-05-23",
+            "market_segment": "sp400",
+            "message": "No signal found today for sp400 market."
+        }
+    }
+}
