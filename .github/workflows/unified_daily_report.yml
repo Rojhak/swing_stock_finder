@@ -84,6 +84,7 @@ jobs:
 
     # Primary email sending method using enhanced_report.py
     - name: Send email report using Python (Primary)
+      id: send_email_primary
       if: steps.enhance_report.outputs.report_exists == 'true' && steps.enhance_report.outputs.report_not_empty == 'true'
       run: |
         echo "DEBUG: ---- Primary Python Email Step ----"
@@ -108,7 +109,7 @@ jobs:
         
     # Fallback email sending method using GitHub Action
     - name: Send email report using GitHub Action (Fallback)
-      if: steps.enhance_report.outputs.report_exists == 'true' && steps.enhance_report.outputs.report_not_empty == 'true' && always() # Ensure this runs even if primary fails
+      if: steps.enhance_report.outputs.report_exists == 'true' && steps.enhance_report.outputs.report_not_empty == 'true' && steps.send_email_primary.outcome != 'success'
       uses: dawidd6/action-send-mail@v3
       with:
         server_address: smtp.gmail.com # Hardcoded for Gmail

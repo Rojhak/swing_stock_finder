@@ -129,9 +129,10 @@ def load_symbols():
                 current_file_symbols = {str(s).strip() for s in symbols_from_file_list if isinstance(s, (str, float, int)) and str(s).strip()}
                 
                 if current_file_symbols:
-                    logger.info(f"Loaded {len(current_file_symbols)} symbols for {market.upper()} market from {filename}")
+                    # logger.info(f"Loaded {len(current_file_symbols)} symbols for {market.upper()} market from {filename}") # Old log
                     market_symbols.update(current_file_symbols)
                     loaded_from_file = True
+                    logger.info(f"Market {market.upper()}: Loaded {len(market_symbols)} symbols from file.")
                 else:
                     logger.warning(f"{market.upper()} tickers file '{filename}' was present but empty or contained no valid symbols.")
             else:
@@ -139,58 +140,65 @@ def load_symbols():
 
             # Fallback to default symbols if no symbols were loaded from file
             if not loaded_from_file:
-                logger.info(f"Attempting to use default list for {market.upper()} symbols.")
+                # logger.info(f"Attempting to use default list for {market.upper()} symbols.") # Old log
                 default_market_symbols = DEFAULT_SYMBOLS.get(market, [])
                 # Clean and filter default symbols
                 cleaned_default_symbols = {str(s).strip() for s in default_market_symbols if isinstance(s, (str, float, int)) and str(s).strip()}
 
                 if cleaned_default_symbols:
-                    logger.info(f"Using {len(cleaned_default_symbols)} default symbols for {market.upper()} market.")
+                    # logger.info(f"Using {len(cleaned_default_symbols)} default symbols for {market.upper()} market.") # Old log
                     market_symbols.update(cleaned_default_symbols)
+                    logger.info(f"Market {market.upper()}: Fell back to {len(cleaned_default_symbols)} default symbols.")
                 else:
                     logger.warning(f"No default symbols found or provided for {market.upper()} market.")
+                    logger.info(f"Market {market.upper()}: Fell back to 0 default symbols (none available/valid).")
         
         except pd.errors.EmptyDataError:
             logger.warning(f"Pandas EmptyDataError: {market.upper()} tickers file '{filename}' is empty. Trying defaults.")
-            # Fallback logic is already part of the "if not loaded_from_file" block,
-            # but explicitly catching helps identify this specific pandas error.
-            # Ensure fallback is attempted if this specific error occurs.
-            if not loaded_from_file: # Redundant if already handled, but safe.
+            if not loaded_from_file:
                 default_market_symbols = DEFAULT_SYMBOLS.get(market, [])
                 cleaned_default_symbols = {str(s).strip() for s in default_market_symbols if isinstance(s, (str, float, int)) and str(s).strip()}
                 if cleaned_default_symbols:
-                    logger.info(f"Using {len(cleaned_default_symbols)} default symbols for {market.upper()} market due to EmptyDataError.")
+                    # logger.info(f"Using {len(cleaned_default_symbols)} default symbols for {market.upper()} market due to EmptyDataError.") # Old log
                     market_symbols.update(cleaned_default_symbols)
+                    logger.info(f"Market {market.upper()}: Fell back to {len(cleaned_default_symbols)} default symbols after EmptyDataError.")
                 else:
                     logger.warning(f"No default symbols found for {market.upper()} market after EmptyDataError.")
+                    logger.info(f"Market {market.upper()}: Fell back to 0 default symbols after EmptyDataError (none available/valid).")
 
         except Exception as e:
             logger.error(f"Error processing {market.upper()} symbols (file: {filename}): {e}. Attempting to use defaults if available.")
-            # Fallback to default symbols in case of any other error during file processing
-            if not loaded_from_file: # Ensure this runs if file load failed partway
+            if not loaded_from_file:
                 default_market_symbols = DEFAULT_SYMBOLS.get(market, [])
                 cleaned_default_symbols = {str(s).strip() for s in default_market_symbols if isinstance(s, (str, float, int)) and str(s).strip()}
                 if cleaned_default_symbols:
-                    logger.info(f"Using {len(cleaned_default_symbols)} default symbols for {market.upper()} market due to error: {e}.")
+                    # logger.info(f"Using {len(cleaned_default_symbols)} default symbols for {market.upper()} market due to error: {e}.") # Old log
                     market_symbols.update(cleaned_default_symbols)
+                    logger.info(f"Market {market.upper()}: Fell back to {len(cleaned_default_symbols)} default symbols after error: {e}.")
                 else:
                     logger.warning(f"No default symbols found for {market.upper()} market after error: {e}.")
+                    logger.info(f"Market {market.upper()}: Fell back to 0 default symbols after error (none available/valid).")
         
-        all_symbols_by_market[market] = sorted(list(market_symbols)) # Store sorted list of unique symbols for the market
+        all_symbols_by_market[market] = sorted(list(market_symbols))
         if not all_symbols_by_market[market]:
              logger.warning(f"No symbols loaded for {market.upper()} market (neither from file nor defaults).")
-
+        # Removed the per-market log here as it's covered by the new logs or the summary below.
 
     # Check if any symbols were loaded at all across all markets
-    total_symbols_loaded = sum(len(symbols) for symbols in all_symbols_by_market.values())
-    if total_symbols_loaded == 0:
-        logger.error("CRITICAL: No symbols loaded across any market segments. Exiting or returning empty structure.")
-        # Depending on desired behavior, could exit or just return the empty all_symbols_by_market
-        return all_symbols_by_market # Returns dict with empty lists per market
+    # Consolidate all unique symbols from all markets
+    all_unique_symbols = set()
+    for symbols_list in all_symbols_by_market.values():
+        all_unique_symbols.update(symbols_list)
+    total_unique_symbols_loaded = len(all_unique_symbols)
 
-    logger.info(f"Symbol loading complete. Markets processed: {list(all_symbols_by_market.keys())}")
-    for market, symbols in all_symbols_by_market.items():
-        logger.info(f"  {market.upper()}: {len(symbols)} symbols loaded.")
+    if total_unique_symbols_loaded == 0:
+        logger.error("CRITICAL: No unique symbols loaded across any market segments. Exiting or returning empty structure.")
+        return all_symbols_by_market
+
+    logger.info(f"Symbol loading complete. Total unique symbols loaded across all markets: {total_unique_symbols_loaded}.")
+    # The old per-market summary log is removed as individual market loading is now logged.
+    # for market, symbols in all_symbols_by_market.items():
+    #     logger.info(f"  {market.upper()}: {len(symbols)} symbols loaded.") # Redundant with new logs
         
     return all_symbols_by_market
 
@@ -440,37 +448,41 @@ def find_current_setups(params): # Pass current STRATEGY_PARAMS
             logger.info(f"No symbols to scan for {market_segment} market segment.")
             continue # Skip to the next market segment
 
-        logger.info(f"Scanning {len(symbols_list)} symbols for {market_segment.upper()} market...")
+        logger.info(f"Starting scan for {market_segment.upper()} with {len(symbols_list)} symbols.")
         for symbol in tqdm(symbols_list, desc=f"Scanning {market_segment.upper()}"):
             df_raw = fetch_stock_data_yf(symbol, period=DATA_FETCH_PERIOD)
-            if df_raw is None: continue
+            if df_raw is None:
+                logger.debug(f"Symbol {symbol}: No data fetched.")
+                continue
             
             df_indicators = calculate_indicators(df_raw)
             if df_indicators is None or df_indicators.empty or \
                len(df_indicators) < params['min_data_days'] or \
                pd.isna(df_indicators['Close'].iloc[-1]):
-                logger.debug(f"Insufficient/invalid indicator data for {symbol} in {market_segment}.")
+                logger.debug(f"Symbol {symbol}: Insufficient/invalid indicator data. Skipping.")
                 continue
                 
             setup_detected, setup_type, tier = detect_setup(df_indicators, idx=-1)
             if setup_detected:
+                logger.debug(f"Symbol {symbol}: Setup DETECTED - Type: {setup_type}, Tier: {tier}")
                 trade_params = calculate_potential_trade_params(df_indicators, entry_idx=-1)
-                if trade_params is None: continue
+                if trade_params is None: continue # Should also log this ideally, or ensure trade_params func logs
                 
                 passes_filter, score = apply_high_probability_filter_live(trade_params, setup_type, tier, params)
                 if passes_filter:
+                    logger.info(f"Symbol {symbol}: PASSED FILTER. Score: {score:.3f}, Setup: {setup_type}, Tier: {tier}")
                     setup_info = {
                         'symbol': symbol,
-                        'date': df_indicators.index[-1].date(), # This is a datetime.date object
+                        'date': df_indicators.index[-1].date(),
                         'setup_type': setup_type,
                         'tier': tier,
-                        'score': score, # Will be renamed to strategy_score by _format_signal_output
-                        'market_segment': market_segment, # Add market segment
-                        **trade_params, # Merge trade parameters
+                        'score': score,
+                        'market_segment': market_segment,
+                        **trade_params,
                         'latest_close': df_indicators['Close'].iloc[-1],
-                        'hist_strength_score': -np.inf, # Default, will be updated
-                        'hist_win_rate': 0.0,          # Default, will be updated
-                        'hist_total_trades': 0         # Default, will be updated
+                        'hist_strength_score': -np.inf,
+                        'hist_win_rate': 0.0,
+                        'hist_total_trades': 0
                     }
                     
                     if long_term_historical_perf_df is not None and not long_term_historical_perf_df.empty:
@@ -481,36 +493,41 @@ def find_current_setups(params): # Pass current STRATEGY_PARAMS
                             setup_info['hist_total_trades'] = symbol_hist_data['hist_total_trades'].iloc[0]
                     
                     all_qualified_setups_with_market.append(setup_info)
-                    logger.debug(f"  Potentially QUALIFIED: {symbol} ({market_segment}) | Score: {score:.3f}")
+                    # logger.debug(f"  Potentially QUALIFIED: {symbol} ({market_segment}) | Score: {score:.3f}") # Replaced by PASSED FILTER log
                 else:
-                    logger.debug(f"  FILTERED OUT (Live): {symbol} ({market_segment}) | Score: {score:.3f}")
+                    logger.debug(f"Symbol {symbol}: FAILED FILTER. Score: {score:.3f}, Setup: {setup_type}, Tier: {tier}")
+            else:
+                logger.debug(f"Symbol {symbol}: No setup detected.")
 
     # --- Signal Identification ---
     overall_top_signal_dict = {}
     segmented_signals_dict = {}
     
+    logger.info(f"Total qualified setups found across all markets (before final selection): {len(all_qualified_setups_with_market)}")
+    if all_qualified_setups_with_market:
+        for s_debug in all_qualified_setups_with_market:
+            logger.debug(f"  Qualified: {s_debug['symbol']}, Score: {s_debug['score']:.3f}, HistStrength: {s_debug.get('hist_strength_score', -np.inf):.2f}, Market: {s_debug['market_segment']}")
+
     # Define sort key
-    sort_key = lambda x: (x['score'], x.get('hist_strength_score', -np.inf)) # hist_strength_score might be NaN
+    sort_key = lambda x: (x['score'], x.get('hist_strength_score', -np.inf))
 
     # Overall Top Signal
     if all_qualified_setups_with_market:
         all_qualified_setups_with_market.sort(key=sort_key, reverse=True)
         overall_top_signal_raw = all_qualified_setups_with_market[0]
         overall_top_signal_dict = _format_signal_output(overall_top_signal_raw, overall_top_signal_raw['market_segment'])
-        logger.info(f"Overall top signal: {overall_top_signal_dict['symbol']} from {overall_top_signal_dict['market_segment']} market "
-                    f"with score {overall_top_signal_dict['strategy_score']:.3f}")
+        logger.info(f"Overall top signal selected: {overall_top_signal_dict.get('symbol')} with score {overall_top_signal_dict.get('strategy_score')}. Full details: {overall_top_signal_dict}")
+
     else:
-        logger.info("No signals found today across any market.")
+        logger.info("No overall top signal selected after filtering and sorting.") # Changed from "No signals found today..."
         overall_top_signal_dict = _format_signal_output(
-            raw_signal_data={'message': 'No signals found today across any market.'},
-            market_segment_name='overall', # Or None, or a specific placeholder
+            raw_signal_data={'message': 'No overall top signal selected after filtering and sorting.'}, # More specific message
+            market_segment_name='overall',
             signal_found=False
         )
-        # Ensure the 'overall' market_segment is more generic if no signal found
-        overall_top_signal_dict['market_segment'] = 'N/A' # Or remove if not applicable to "no overall signal"
+        overall_top_signal_dict['market_segment'] = 'N/A'
 
     # Per-Segment Top Signals
-    # Iterate through all market segments defined in TICKER_FILES to ensure all are represented
     for segment_key in TICKER_FILES.keys():
         segment_setups = [s for s in all_qualified_setups_with_market if s['market_segment'] == segment_key]
         if segment_setups:
@@ -518,12 +535,11 @@ def find_current_setups(params): # Pass current STRATEGY_PARAMS
             top_signal_for_segment_raw = segment_setups[0]
             formatted_segment_signal = _format_signal_output(top_signal_for_segment_raw, segment_key)
             segmented_signals_dict[segment_key] = formatted_segment_signal
-            logger.info(f"Top signal for {segment_key.upper()} market: {formatted_segment_signal['symbol']} "
-                        f"with score {formatted_segment_signal['strategy_score']:.3f}")
+            logger.info(f"Top signal for {segment_key.upper()} market selected: {formatted_segment_signal.get('symbol')} with score {formatted_segment_signal.get('strategy_score')}. Details: {formatted_segment_signal}")
         else:
-            logger.info(f"No signal found today for {segment_key.upper()} market.")
+            logger.info(f"No top signal selected for {segment_key.upper()} market after filtering and sorting.")
             segmented_signals_dict[segment_key] = _format_signal_output(
-                raw_signal_data={'message': f'No signal found today for {segment_key} market.'},
+                raw_signal_data={'message': f'No top signal selected for {segment_key} market after filtering and sorting.'}, # More specific
                 market_segment_name=segment_key,
                 signal_found=False
             )
