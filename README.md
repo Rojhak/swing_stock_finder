@@ -44,3 +44,5 @@ The core logic for generating trading signals resides in the main script.
     -   `results/long_term_historical_perf/historical_symbol_performance_long_term.csv`
 
 Ensure these dependencies are available in the environment where the script is run (they are handled by the GitHub Actions workflow) and that the data files are correctly placed within the repository.
+
+If the historical performance CSV is missing or empty, `scripts/high_current.py` still executes. When no long-term data is loaded, the script ranks setups by strategy score and then by their latest close price (and symbol) so repeated ties don't always select the same ticker.
