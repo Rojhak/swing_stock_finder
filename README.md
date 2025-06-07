@@ -38,9 +38,9 @@ The core logic for generating trading signals resides in the main script.
     -   `numpy`
     -   `tqdm`
 -   **Required Data Files**: The script requires the following data files to be present in the repository:
-    -   `data/euro_tickers.csv`
-    -   `data/sp400_tickers.csv`
-    -   `data/sp500_tickers.csv`
+    -   `Data/euro_tickers.csv`
+    -   `Data/sp400_tickers.csv`
+    -   `Data/sp500_tickers.csv`
     -   `results/long_term_historical_perf/historical_symbol_performance_long_term.csv`
 
 Ensure these dependencies are available in the environment where the script is run (they are handled by the GitHub Actions workflow) and that the data files are correctly placed within the repository.

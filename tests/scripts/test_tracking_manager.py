@@ -1,7 +1,12 @@
 import unittest
-import pandas as pd
+import pytest
+
+try:
+    import pandas as pd
+    import numpy as np
+except ModuleNotFoundError:
+    pytest.skip("pandas not installed", allow_module_level=True)
 import os
-import numpy as np
 from datetime import datetime, date, timedelta
 from unittest.mock import patch, MagicMock, call
 

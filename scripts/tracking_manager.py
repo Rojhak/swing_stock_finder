@@ -249,10 +249,11 @@ def update_active_trades() -> bool:
 
         for index in active_trade_indices:
             symbol = df.loc[index, 'symbol']
-            entry_price_str = df.loc[index, 'entry_price'] # Keep as string for robust conversion
+            entry_price_str = df.loc[index, 'entry_price']  # Keep as string for robust conversion
             entry_date_str = df.loc[index, 'entry_date']
-            
-            current_price = np.nan # Default to NaN
+
+            current_price = np.nan  # Default to NaN
+            df.loc[index, 'current_price'] = np.nan  # Reset to NaN before attempting update
 
             try:
                 logger.debug(f"Fetching current price for active trade: {symbol}")
@@ -265,12 +266,13 @@ def update_active_trades() -> bool:
                     trades_updated_count +=1
                 else:
                     logger.warning(f"No 'Close' price data returned for {symbol}. Skipping price update.")
-                    # df.loc[index, 'current_price'] = np.nan # Ensure it is NaN if fetch fails
+                    df.loc[index, 'current_price'] = np.nan  # Ensure it is NaN if fetch fails
             except IndexError:
-                 logger.warning(f"IndexError fetching price for {symbol}. Likely no data or not enough data. Skipping price update.")
+                logger.warning(f"IndexError fetching price for {symbol}. Likely no data or not enough data. Skipping price update.")
+                df.loc[index, 'current_price'] = np.nan
             except Exception as e:
                 logger.error(f"Error fetching yfinance data for {symbol}: {e}. Skipping price update for this symbol.")
-                # df.loc[index, 'current_price'] = np.nan # Ensure it is NaN if fetch fails
+                df.loc[index, 'current_price'] = np.nan  # Ensure it is NaN if fetch fails
 
             # Calculate Unrealized P&L (as percentage)
             # Ensure entry_price is float for calculation

@@ -180,6 +180,39 @@ def get_monthly_performance_report(year: int, month: int) -> Dict[str, Any]:
 
     return report
 
+
+def export_trade_history(output_dir: str) -> Optional[str]:
+    """Export the entire trade history CSV to the specified directory."""
+    if not os.path.exists(TRADES_FILE_PATH) or os.path.getsize(TRADES_FILE_PATH) == 0:
+        logger.error(f"Trades file not found or empty: {TRADES_FILE_PATH}")
+        return None
+
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_path = os.path.join(output_dir, f"trade_history_{timestamp}.csv")
+        pd.read_csv(TRADES_FILE_PATH).to_csv(output_path, index=False)
+        logger.info(f"Trade history exported to {output_path}")
+        return output_path
+    except Exception as e:
+        logger.error(f"Error exporting trade history: {e}")
+        return None
+
+
+def export_monthly_report_csv(year: int, month: int, output_dir: str) -> Optional[str]:
+    """Generate and export a monthly performance report to CSV."""
+    report = get_monthly_performance_report(year, month)
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        trades_df = pd.DataFrame(report.get('contributing_trades', []))
+        output_path = os.path.join(output_dir, f"monthly_report_{year}_{month:02d}.csv")
+        trades_df.to_csv(output_path, index=False)
+        logger.info(f"Monthly report CSV exported to {output_path}")
+        return output_path
+    except Exception as e:
+        logger.error(f"Error exporting monthly report CSV: {e}")
+        return None
+
 if __name__ == "__main__":
     logger.info("--- Generating Monthly Performance Report Demonstration ---")
     
