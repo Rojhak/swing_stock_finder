@@ -109,11 +109,23 @@ def load_long_term_historical_stats():
 def load_symbols():
     all_symbols_by_market = {} # Initialize dictionary to store symbols by market
 
+    logger.info(f"Attempting to list contents of DATA_DIR ({DATA_DIR})...")
+    try:
+        data_dir_contents = os.listdir(DATA_DIR)
+        logger.info(f"Contents of DATA_DIR ({DATA_DIR}): {data_dir_contents}")
+        if not data_dir_contents:
+            logger.warning(f"DATA_DIR ({DATA_DIR}) is empty.")
+    except FileNotFoundError:
+        logger.error(f"DATA_DIR ({DATA_DIR}) not found when trying to list contents.")
+    except Exception as e:
+        logger.error(f"Error listing contents of DATA_DIR ({DATA_DIR}): {e}")
+
     for market, filename in TICKER_FILES.items():
         market_symbols = set() # Use a set for uniqueness within the market before converting to list
         loaded_from_file = False
         
         try:
+            logger.info(f"For market {market.upper()}, checking existence of file at exact path: '{filename}'")
             if os.path.exists(filename):
                 df_tickers = pd.read_csv(filename, header=0)
                 symbols_from_file_list = []
