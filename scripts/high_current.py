@@ -534,8 +534,19 @@ def find_current_setups(params): # Pass current STRATEGY_PARAMS
         for s_debug in all_qualified_setups_with_market:
             logger.debug(f"  Qualified: {s_debug['symbol']}, Score: {s_debug['score']:.3f}, HistStrength: {s_debug.get('hist_strength_score', -np.inf):.2f}, Market: {s_debug['market_segment']}")
 
-    # Define sort key
-    sort_key = lambda x: (x['score'], x.get('hist_strength_score', -np.inf))
+    # Determine if historical performance data is available for tie-breaking
+    hist_data_available = (
+        long_term_historical_perf_df is not None
+        and not long_term_historical_perf_df.empty
+    )
+
+    if hist_data_available:
+        sort_key = lambda x: (x['score'], x.get('hist_strength_score', -np.inf))
+    else:
+        logger.info(
+            "No long-term historical stats available; using latest close as a tie-breaker."
+        )
+        sort_key = lambda x: (x['score'], x.get('latest_close', 0.0), x['symbol'])
 
     # Overall Top Signal
     if all_qualified_setups_with_market:
