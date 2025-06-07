@@ -11,7 +11,12 @@ It tracks signals from existing files and shows performance metrics.
 import os
 import sys
 import glob
-import pandas as pd
+import pytest
+try:
+    import pandas as pd
+except ModuleNotFoundError:
+    pd = None
+    pytest.skip("pandas not installed", allow_module_level=True)
 from pathlib import Path
 from datetime import datetime, timedelta
 import logging

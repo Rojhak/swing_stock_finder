@@ -34,12 +34,15 @@ logger = logging.getLogger(__name__)
 def load_email_credentials():
     logger.info("Attempting to load email credentials exclusively from environment variables...")
     
-    mail_host_env = os.environ.get('MAIL_HOST')
+    mail_host_env = os.environ.get('MAIL_HOST') or os.environ.get('MAIL_SERVER')
     mail_port_env = os.environ.get('MAIL_PORT')
     username_from_env = os.environ.get('MAIL_USERNAME')
     password_from_env = os.environ.get('MAIL_PASSWORD')
 
-    logger.info(f"Read from env: MAIL_HOST='{mail_host_env}' (type: {type(mail_host_env)})")
+    logger.info(
+        f"Read from env: MAIL_HOST/MAIL_SERVER='{mail_host_env}'"
+        f" (type: {type(mail_host_env)})"
+    )
     logger.info(f"Read from env: MAIL_PORT='{mail_port_env}' (type: {type(mail_port_env)})")
     logger.info(f"Read from env: MAIL_USERNAME='{username_from_env}' (type: {type(username_from_env)})")
     
@@ -58,7 +61,7 @@ def load_email_credentials():
         }
     else:
         missing_or_empty = []
-        if not mail_host_env: missing_or_empty.append("MAIL_HOST")
+        if not mail_host_env: missing_or_empty.append("MAIL_HOST/MAIL_SERVER")
         if not mail_port_env: missing_or_empty.append("MAIL_PORT")
         if not username_from_env: missing_or_empty.append("MAIL_USERNAME")
         if not password_from_env: missing_or_empty.append("MAIL_PASSWORD")
@@ -95,9 +98,11 @@ def format_signal_for_report(signal_data, title_prefix=""):
     hist_strength = signal_data.get('historical_strength_score')
     hist_win_rate = signal_data.get('historical_win_rate')
     hist_trades = signal_data.get('historical_total_trades')
-    
-    if hist_strength and hist_win_rate and hist_trades:
-        lines.append(f"  Historical Strength: {hist_strength:.2f} (Win Rate: {hist_win_rate:.2%}, Trades: {hist_trades})")
+
+    if hist_strength is not None and hist_win_rate is not None and hist_trades is not None:
+        lines.append(
+            f"  Historical Strength: {hist_strength:.2f} (Win Rate: {hist_win_rate:.2%}, Trades: {hist_trades})"
+        )
     
     # Pricing data
     if 'latest_close' in signal_data:

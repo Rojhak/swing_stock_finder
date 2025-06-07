@@ -49,8 +49,8 @@ logger.info(f"--- END PATH DIAGNOSTICS ---")
 
 # --- Path Constants ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_BASE_DIR = os.path.dirname(SCRIPT_DIR) 
-DATA_DIR = os.path.join(PROJECT_BASE_DIR, 'data') 
+PROJECT_BASE_DIR = os.path.dirname(SCRIPT_DIR)
+DATA_DIR = os.path.join(PROJECT_BASE_DIR, 'Data')
 
 logger.info(f"--- RESOLVED PATH CONSTANTS ---")
 logger.info(f"SCRIPT_DIR: {SCRIPT_DIR}")

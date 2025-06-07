@@ -54,9 +54,10 @@ def get_top_historical_picks(n_top: int = 5) -> list:
 
     # Ensure hist_strength_score is numeric and handle potential errors
     df[required_column] = pd.to_numeric(df[required_column], errors='coerce')
-    df.dropna(subset=[required_column], inplace=True) # Remove rows where conversion failed
+    df.dropna(subset=[required_column], inplace=True)  # Remove rows where conversion failed
 
-    if df.empty after_dropna: # Check if empty after removing NaNs
+    # Check if DataFrame became empty after dropping NaN values
+    if df.empty:
         logger.warning("Historical performance DataFrame is empty after handling non-numeric scores.")
         return []
         
