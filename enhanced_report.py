@@ -164,12 +164,15 @@ def generate_report_from_json(json_path, output_path="report.txt"):
             # Safety Net: Stale if older than today (age_days > 0)
             # Fix B criteria: Stale if older than 3 days (age_days > 3) OR price is below stop loss
             stale_due_to_age_safety = age_days > 0
-            stale_due_to_fix_b = (age_days > 3) or is_below_stop_loss
+            # stale_due_to_fix_b = (age_days > 3) or is_below_stop_loss # Original Fix B part
 
-            is_stale = stale_due_to_age_safety or stale_due_to_fix_b
+            # Simplified staleness condition as per request:
+            # A signal is stale if it's older than today (age_days > 0) OR if the price is below stop loss.
+            # The (age_days > 3) part is removed from the OR condition with is_below_stop_loss.
+            is_stale = (age_days > 0) or is_below_stop_loss
 
             if is_stale:
-                logger.info(f"Signal for {signal_dict.get('symbol', 'N/A')} dated {signal_date_str} is STALE. Age: {age_days} days. Below SL: {is_below_stop_loss}. Safety stale: {stale_due_to_age_safety}. Fix B stale: {stale_due_to_fix_b}.")
+                logger.info(f"Signal for {signal_dict.get('symbol', 'N/A')} dated {signal_date_str} is STALE. Age: {age_days} days. Below SL: {is_below_stop_loss}.")
             else:
                 logger.info(f"Signal for {signal_dict.get('symbol', 'N/A')} dated {signal_date_str} is VALID. Age: {age_days} days. Below SL: {is_below_stop_loss}.")
 
