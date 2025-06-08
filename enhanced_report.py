@@ -133,17 +133,75 @@ def generate_report_from_json(json_path, output_path="report.txt"):
         # Load JSON data
         with open(json_path, 'r') as f:
             signal_data = json.load(f)
+
+        scan_date = datetime.datetime.now().date()
+
+        def is_signal_stale(signal_dict, scan_date_obj):
+            if not signal_dict or not signal_dict.get('signal_found'):
+                return False  # Not stale if no signal or already marked not found
+
+            try:
+                signal_date_str = signal_dict.get('date')
+                if not signal_date_str: return True # Stale if no date
+                signal_date_obj = datetime.datetime.strptime(signal_date_str, '%Y-%m-%d').date()
+            except ValueError:
+                logger.warning(f"Could not parse date '{signal_dict.get('date')}' for signal. Considering it stale.")
+                return True # Stale if date is unparseable
+
+            age_days = (scan_date_obj - signal_date_obj).days
+
+            latest_close = signal_dict.get('latest_close')
+            stop_loss = signal_dict.get('stop_loss_price')
+            is_below_stop_loss = False
+            if latest_close is not None and stop_loss is not None:
+                try:
+                    is_below_stop_loss = float(latest_close) <= float(stop_loss)
+                except (ValueError, TypeError):
+                    logger.warning(f"Could not compare latest_close '{latest_close}' and stop_loss '{stop_loss}'. Assuming not below stop loss.")
+                    is_below_stop_loss = False
+
+            # Staleness conditions:
+            # Safety Net: Stale if older than today (age_days > 0)
+            # Fix B criteria: Stale if older than 3 days (age_days > 3) OR price is below stop loss
+            stale_due_to_age_safety = age_days > 0
+            stale_due_to_fix_b = (age_days > 3) or is_below_stop_loss
+
+            is_stale = stale_due_to_age_safety or stale_due_to_fix_b
+
+            if is_stale:
+                logger.info(f"Signal for {signal_dict.get('symbol', 'N/A')} dated {signal_date_str} is STALE. Age: {age_days} days. Below SL: {is_below_stop_loss}. Safety stale: {stale_due_to_age_safety}. Fix B stale: {stale_due_to_fix_b}.")
+            else:
+                logger.info(f"Signal for {signal_dict.get('symbol', 'N/A')} dated {signal_date_str} is VALID. Age: {age_days} days. Below SL: {is_below_stop_loss}.")
+
+            return is_stale
+
+        # Process overall_top_signal for staleness
+        overall_signal_data = signal_data.get('overall_top_signal')
+        if overall_signal_data and is_signal_stale(overall_signal_data, scan_date):
+            logger.info(f"Overall top signal for {overall_signal_data.get('symbol', 'N/A')} is stale. Invalidating.")
+            overall_signal_data['signal_found'] = False
+            overall_signal_data['message'] = "Stale signal expired (older than today or failed validity checks). No overall top signal."
+            signal_data['overall_top_signal'] = overall_signal_data # Update the main dict
+
+        # Process segmented_signals for staleness
+        segmented_signals_data = signal_data.get('segmented_signals', {})
+        for segment_name, segment_data_item in segmented_signals_data.items():
+            if segment_data_item and is_signal_stale(segment_data_item, scan_date):
+                logger.info(f"Segment signal for {segment_name} ({segment_data_item.get('symbol', 'N/A')}) is stale. Invalidating.")
+                segment_data_item['signal_found'] = False
+                segment_data_item['message'] = f"Stale signal expired for {segment_name} (older than today or failed validity checks). No trade today."
+                signal_data['segmented_signals'][segment_name] = segment_data_item # Update the main dict
         
         # Start building the report
         report_lines = []
         
-        # Overall top signal
+        # Overall top signal (potentially updated)
         overall_signal = signal_data.get('overall_top_signal', {})
         overall_text = format_signal_for_report(overall_signal, "Overall Top Selected Trade Candidate for Today")
         report_lines.append(overall_text)
         report_lines.append("")  # Add a blank line
         
-        # Per-segment signals
+        # Per-segment signals (potentially updated)
         report_lines.append("\n--- Per-Segment Top Signal Summary ---\n")
         
         segmented_signals = signal_data.get('segmented_signals', {})

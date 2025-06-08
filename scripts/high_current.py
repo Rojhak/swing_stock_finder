@@ -312,27 +312,43 @@ def calculate_indicators(df):
     return df_indicators.dropna(subset=['ATR', 'ma200', 'rsi']) # Ensure key indicators are present
 
 def detect_setup(df, idx=-1):
-    # (Identical to the robust version from previous script)
-    required_for_any_setup = ['rsi', 'close_vs_open', 'day_thick_line_green', 'ma5', 'ma20', 'ma50', 'ATR']
+    # Sort DataFrame by index in descending order (newest first)
+    df = df.sort_index(ascending=False)
+
+    required_for_any_setup = ['rsi', 'close_vs_open', 'day_thick_line_green', 'ma5', 'ma20', 'ma50', 'ATR', 'Volume'] # Added 'Volume' just in case, can be removed if not used by specific setup logic directly
     
     missing_cols_for_setup = [col for col in required_for_any_setup if col not in df.columns]
     if missing_cols_for_setup:
         logger.debug(f"Cannot detect setup; DataFrame is missing required indicator columns: {missing_cols_for_setup}. This might be due to insufficient data for their calculation.")
         return False, None, None
-        
-    effective_idx = len(df) - 1 if idx == -1 else idx
-    if not (1 <= effective_idx < len(df)): 
-        logger.debug(f"Cannot detect setup; effective_idx {effective_idx} is out of bounds for DataFrame of length {len(df)}.")
-        return False, None, None 
-        
-    current_values = {col: df[col].iloc[effective_idx] for col in required_for_any_setup} # Already checked columns exist
-    prev_values = {col: df[col].iloc[effective_idx-1] for col in required_for_any_setup} # Assumes effective_idx > 0 which is true if 1 <= effective_idx
+
+    # If idx is -1 (default, meaning latest), current_candle_idx is 0 (first row after sort).
+    # Otherwise, use the provided idx.
+    current_candle_idx = 0 if idx == -1 else idx
+    previous_candle_idx = current_candle_idx + 1
+
+    # Boundary checks
+    if not (0 <= current_candle_idx < len(df)):
+        logger.debug(f"Cannot detect setup; current_candle_idx {current_candle_idx} is out of bounds for DataFrame of length {len(df)}.")
+        return False, None, None
+
+    if not (previous_candle_idx < len(df)):
+        logger.debug(f"Cannot detect setup; previous_candle_idx {previous_candle_idx} is out of bounds for DataFrame of length {len(df)}. Not enough data for comparison.")
+        return False, None, None
+
+    # Ensure we have at least two rows of data for current and previous values after sorting
+    if len(df) <= 1:
+        logger.debug(f"Cannot detect setup; DataFrame has {len(df)} rows, need at least 2 for current and previous values.")
+        return False, None, None
+
+    current_values = {col: df[col].iloc[current_candle_idx] for col in required_for_any_setup}
+    prev_values = {col: df[col].iloc[previous_candle_idx] for col in required_for_any_setup}
     
     nan_current = [k for k, v in current_values.items() if pd.isna(v)]
     nan_prev = [k for k, v in prev_values.items() if pd.isna(v)]
 
     if nan_current or nan_prev:
-        logger.debug(f"Cannot detect setup; NaN values found in current ({nan_current}) or previous ({nan_prev}) indicator values.")
+        logger.debug(f"Cannot detect setup; NaN values found in current ({nan_current}) or previous ({nan_prev}) indicator values after sorting.")
         return False, None, None
         
     setup_detected, setup_type, tier = False, None, None
@@ -341,7 +357,10 @@ def detect_setup(df, idx=-1):
     current_ma5, prev_ma5 = current_values['ma5'], prev_values['ma5']
     current_ma20, prev_ma20 = current_values['ma20'], prev_values['ma20']
     current_ma50, prev_ma50 = current_values['ma50'], prev_values['ma50']
-    current_volume_ratio = df['volume_ratio'].iloc[effective_idx] if 'volume_ratio' in df.columns and not pd.isna(df['volume_ratio'].iloc[effective_idx]) else np.nan
+
+    # Use current_candle_idx for current_volume_ratio
+    current_volume_ratio = df['volume_ratio'].iloc[current_candle_idx] if 'volume_ratio' in df.columns and not pd.isna(df['volume_ratio'].iloc[current_candle_idx]) else np.nan
+
     if current_day_thick_line_green == 1 and current_rsi > 30 and prev_rsi <= 30:
         setup_detected, setup_type, tier = True, 'BOTTOM_TURN', 'high'
     elif (current_ma5 > current_ma20 and prev_ma5 <= prev_ma20) or \
@@ -349,20 +368,44 @@ def detect_setup(df, idx=-1):
         setup_detected, setup_type, tier = True, 'MA_CROSS', 'medium'
     elif not pd.isna(current_volume_ratio) and not pd.isna(current_close_vs_open) and \
          ((current_volume_ratio > STRATEGY_PARAMS['volume_spike_threshold'] and current_close_vs_open > 0) or \
-          (current_volume_ratio > 1.0 and current_close_vs_open > 0.01)):
+          (current_volume_ratio > 1.0 and current_close_vs_open > 0.01)): # Ensure positive price move for general volume spike
         setup_detected, setup_type, tier = True, 'VOLUME_SPIKE', 'low'
-    elif not pd.isna(current_close_vs_open) and current_rsi > 30 and prev_rsi <= 30 and current_close_vs_open > 0: 
-        setup_detected, setup_type, tier = True, 'VOLUME_SPIKE', 'low' 
+    # This last condition seems redundant or too similar to BOTTOM_TURN if current_close_vs_open > 0 implies a price increase from open.
+    # And if it's about RSI turn, it's covered. If it's about general positive movement with RSI turn, it's also covered.
+    # Let's assume the existing logic is preferred unless specified.
+    # Original: elif not pd.isna(current_close_vs_open) and current_rsi > 30 and prev_rsi <= 30 and current_close_vs_open > 0:
+    # This is essentially BOTTOM_TURN (rsi > 30 and prev_rsi <= 30) combined with a positive close_vs_open.
+    # BOTTOM_TURN already captures the RSI condition. If close_vs_open is an additional filter, it should be part of BOTTOM_TURN or a new type.
+    # For now, keeping it distinct as per original logic but noting potential overlap.
+    elif not pd.isna(current_close_vs_open) and current_rsi > 30 and prev_rsi <= 30 and current_close_vs_open > 0.005: # Made threshold slightly more significant
+        setup_detected, setup_type, tier = True, 'RSI_TURN_POSITIVE_CLOSE', 'low' # Renamed for clarity
+
     return setup_detected, setup_type, tier
 
 def calculate_potential_trade_params(df, entry_idx=-1):
-    # (Identical to previous live scanner)
-    effective_idx = len(df) - 1 if entry_idx == -1 else entry_idx
+    # entry_idx here will correspond to current_candle_idx after sorting in detect_setup
+    # So, if detect_setup passes idx=-1, it means current_candle_idx = 0 (latest)
+    # This function will then also use df.iloc[0] if entry_idx is -1 (or 0)
+
+    # If df is already sorted descending, and entry_idx is for the "current" candle (e.g. 0 for latest)
+    effective_idx = 0 if entry_idx == -1 else entry_idx
+
+    if not (0 <= effective_idx < len(df)): # Check bounds
+        logger.warning(f"calculate_potential_trade_params: effective_idx {effective_idx} out of bounds for df of length {len(df)}")
+        return None
+
     if not ('ATR' in df.columns and 'Close' in df.columns and 
             not pd.isna(df['ATR'].iloc[effective_idx]) and 
-            not pd.isna(df['Close'].iloc[effective_idx])): return None
+            not pd.isna(df['Close'].iloc[effective_idx])):
+        logger.warning(f"calculate_potential_trade_params: Missing ATR/Close or NaN values at effective_idx {effective_idx}.")
+        return None
+
     entry_price, atr_val = df['Close'].iloc[effective_idx], df['ATR'].iloc[effective_idx]
-    if pd.isna(atr_val) or atr_val == 0: return None
+
+    if pd.isna(atr_val) or atr_val <= 0: # ATR must be positive
+        logger.warning(f"calculate_potential_trade_params: Invalid ATR value ({atr_val}) at effective_idx {effective_idx}.")
+        return None
+
     stop_loss_price = entry_price - (atr_val * STRATEGY_PARAMS['atr_multiplier'])
     target_price = entry_price + (atr_val * STRATEGY_PARAMS['atr_multiplier'] * STRATEGY_PARAMS['target_multiplier'])
     risk_reward_ratio = (target_price - entry_price) / (entry_price - stop_loss_price) if (entry_price - stop_loss_price) > 1e-9 else 0
