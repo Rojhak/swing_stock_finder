@@ -525,31 +525,60 @@ def find_current_setups(params): # Pass current STRATEGY_PARAMS
                 continue
             
             df_indicators = calculate_indicators(df_raw)
-            if df_indicators is None or df_indicators.empty or \
-               len(df_indicators) < params['min_data_days'] or \
-               pd.isna(df_indicators['Close'].iloc[-1]):
-                logger.debug(f"Symbol {symbol}: Insufficient/invalid indicator data. Skipping.")
+            if df_indicators is None or df_indicators.empty: # Initial check before sorting and more detailed checks
+                logger.debug(f"Symbol {symbol}: Indicator calculation failed or returned empty DataFrame. Skipping.")
+                continue
+
+            # Ensure df_indicators is sorted newest-first before any operations that rely on iloc[0] for latest data
+            df_indicators = df_indicators.sort_index(ascending=False)
+
+            # Now perform checks that might rely on iloc[0] (or specific index assumptions)
+            if len(df_indicators) < params['min_data_days']:
+                logger.debug(f"Symbol {symbol}: Insufficient data after indicator calculation ({len(df_indicators)} days). Need {params['min_data_days']}. Skipping.")
+                continue
+            if pd.isna(df_indicators['Close'].iloc[0]): # Check latest close after sorting
+                logger.debug(f"Symbol {symbol}: Latest close is NaN after sorting. Skipping.")
                 continue
                 
-            setup_detected, setup_type, tier = detect_setup(df_indicators, idx=-1)
+            # Pass the already sorted df_indicators to detect_setup.
+            # detect_setup itself also sorts, which is redundant but harmless.
+            # idx=-1 in detect_setup will correctly use iloc[0] of the (again) sorted df.
+            setup_detected, setup_type, tier = detect_setup(df_indicators.copy(), idx=-1) # Pass a copy if detect_setup modifies it, though it shouldn't with current logic beyond sorting
+
             if setup_detected:
                 logger.debug(f"Symbol {symbol}: Setup DETECTED - Type: {setup_type}, Tier: {tier}")
+                # calculate_potential_trade_params expects a DataFrame sorted newest-first
+                # and entry_idx=-1 implies using iloc[0] for the latest data.
                 trade_params = calculate_potential_trade_params(df_indicators, entry_idx=-1)
-                if trade_params is None: continue # Should also log this ideally, or ensure trade_params func logs
+                if trade_params is None:
+                    logger.debug(f"Symbol {symbol}: Could not calculate trade parameters even after setup detection. Skipping.")
+                    continue
                 
                 passes_filter, score = apply_high_probability_filter_live(trade_params, setup_type, tier, params)
                 if passes_filter:
                     logger.info(f"Symbol {symbol}: PASSED FILTER. Score: {score:.3f}, Setup: {setup_type}, Tier: {tier}")
+                    # df_indicators is sorted descending, so iloc[0] is the latest.
+                    # The .date() method is for pandas Timestamp objects, which df_indicators.index should contain.
+                    latest_date = df_indicators.index[0]
+                    # Ensure it's a date object, not datetime, if that's the desired format.
+                    # If latest_date is already a DatetimeIndex, latest_date.date would be an array of date objects.
+                    # We need a single date object for the 'date' field.
+                    # Assuming index[0] gives a Timestamp.
+                    if isinstance(latest_date, pd.Timestamp):
+                        signal_date_obj = latest_date.date()
+                    else: # Fallback or if it's already a date object (less likely for raw df index)
+                        signal_date_obj = latest_date
+
                     setup_info = {
                         'symbol': symbol,
-                        'date': df_indicators.index[-1].date(),
+                        'date': signal_date_obj, # Use the date from the latest candle
                         'setup_type': setup_type,
                         'tier': tier,
                         'score': score,
                         'market_segment': market_segment,
-                        **trade_params,
-                        'latest_close': df_indicators['Close'].iloc[-1],
-                        'hist_strength_score': -np.inf,
+                        **trade_params, # entry_price, stop_loss_price etc. are from latest candle via calculate_potential_trade_params
+                        'latest_close': df_indicators['Close'].iloc[0], # Explicitly use iloc[0] for latest close
+                        'hist_strength_score': -np.inf, # Default values
                         'hist_win_rate': 0.0,
                         'hist_total_trades': 0
                     }
@@ -654,8 +683,44 @@ def generate_json_output(signal_data_complex: dict):
     prints JSON to stdout. Otherwise, saves to a file in
     PROJECT_BASE_DIR/results/live_signals/ with filename daily_signal_YYYY-MM-DD.json.
     """
+    current_scan_date_str = datetime.now().strftime('%Y-%m-%d')
+    scan_date_for_validation = current_scan_date_str # Use the same for internal validation
+
+    # Validate signal content dates against the current scan date
+    # Overall Signal Validation
+    overall_signal = signal_data_complex.get('overall_top_signal', {})
+    if overall_signal.get('signal_found'):
+        signal_internal_date = overall_signal.get('date')
+        if signal_internal_date != scan_date_for_validation:
+            logger.warning(
+                f"Overall signal {overall_signal.get('symbol', 'N/A')} invalidated due to date mismatch: "
+                f"signal date {signal_internal_date}, scan date {scan_date_for_validation}."
+            )
+            overall_signal['signal_found'] = False
+            overall_signal['message'] = (
+                f"Signal date ({signal_internal_date}) mismatches scan date ({scan_date_for_validation}). Invalidated."
+            )
+            # signal_data_complex['overall_top_signal'] = overall_signal # Update if it's a copy, not needed if reference
+
+    # Segmented Signals Validation
+    segmented_signals = signal_data_complex.get('segmented_signals', {})
+    for segment_name, segment_data in segmented_signals.items():
+        if segment_data.get('signal_found'):
+            signal_internal_date = segment_data.get('date')
+            if signal_internal_date != scan_date_for_validation:
+                logger.warning(
+                    f"Segment signal {segment_data.get('symbol', 'N/A')} for {segment_name} invalidated due to date mismatch: "
+                    f"signal date {signal_internal_date}, scan date {scan_date_for_validation}."
+                )
+                segment_data['signal_found'] = False
+                segment_data['message'] = (
+                    f"Signal date ({signal_internal_date}) mismatches scan date ({scan_date_for_validation}). "
+                    f"Invalidated for {segment_name}."
+                )
+                # segmented_signals[segment_name] = segment_data # Update if it's a copy, not needed if reference
+
     try:
-        # Serialize the entire complex dictionary
+        # Serialize the entire complex dictionary (potentially modified)
         json_output = json.dumps(signal_data_complex, indent=4)
     except TypeError as e:
         logger.error(f"Error serializing complex signal data to JSON: {e}")
@@ -672,33 +737,11 @@ def generate_json_output(signal_data_complex: dict):
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
             
-            # Determine date for filename from the complex data structure
-            signal_date_str = None
-            overall_signal = signal_data_complex.get('overall_top_signal', {})
-            
-            if overall_signal.get('signal_found') and isinstance(overall_signal.get('date'), str):
-                signal_date_str = overall_signal['date']
-            else: # Try segmented signals if overall doesn't have a valid date
-                segmented_signals = signal_data_complex.get('segmented_signals', {})
-                for market_data in segmented_signals.values():
-                    if market_data.get('signal_found') and isinstance(market_data.get('date'), str):
-                        signal_date_str = market_data['date']
-                        break # Found a date from a segmented signal
-            
-            if not signal_date_str: # Fallback to current date
-                logger.warning("Could not determine signal date from overall or segmented signals; using current date for filename.")
-                signal_date_str = datetime.now().strftime('%Y-%m-%d')
-
-            # Validate the determined date format
-            try:
-                datetime.strptime(signal_date_str, '%Y-%m-%d') # Validates format
-            except ValueError:
-                logger.error(f"Invalid date format '{signal_date_str}' determined for filename. Using current date as fallback.")
-                signal_date_str = datetime.now().strftime('%Y-%m-%d')
-
-            filename = f"daily_signal_{signal_date_str}.json"
+            # Use current_scan_date_str for the filename
+            filename = f"daily_signal_{current_scan_date_str}.json"
             filepath = output_dir / filename
             
+            logger.info(f"Attempting to save JSON output to: {filepath}")
             with open(filepath, 'w') as f:
                 f.write(json_output)
             logger.info(f"Saving complex signal data (overall and segmented) to file: {filepath}")
