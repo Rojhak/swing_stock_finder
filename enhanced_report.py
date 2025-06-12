@@ -487,29 +487,29 @@ def send_report_email(report_file_path, credentials, recipient_email="katar.fhm@
     
     return False
 
-def enhanced_report_workflow(json_path=None, output_path="report.txt", send_email=True):
+def enhanced_report_workflow(json_to_process: str, output_path="report.txt", send_email=True):
     """
     Complete report workflow:
-    1. Find latest signal file if not provided
-    2. Generate report
-    3. Track signal changes
-    4. Send email
+    1. Generate report from a given JSON file.
+    2. Track signal changes.
+    3. Send email.
+    The json_to_process path is mandatory and verified by the caller (main).
     """
     logger.info("Starting enhanced report workflow...")
+
+    if not json_to_process: # This check is more of a safeguard for direct calls.
+        logger.critical("CRITICAL: No signal file path provided to workflow function.")
+        return False
+    if not os.path.exists(json_to_process):
+        logger.error(f"Signal file provided to workflow does not exist: {json_to_process}")
+        return False
     
-    # Find the latest signal file if not provided
-    if not json_path:
-        json_path = find_latest_signal_file()
-        if not json_path:
-            logger.error("No signal file found.")
-            return False
-    
-    logger.info(f"Using signal file: {json_path}")
+    logger.info(f"Workflow processing signal file: {json_to_process}")
     
     # Generate the report
-    report_success = generate_report_from_json(json_path, output_path)
+    report_success = generate_report_from_json(json_to_process, output_path)
     if not report_success:
-        logger.error("Failed to generate report.")
+        logger.error(f"Failed to generate report from {json_to_process}.")
         return False
     
     # Track signal changes
@@ -555,31 +555,58 @@ def main():
     
     # Normal operation mode
     logger.info("Proceeding with normal operation mode (report generation and optional email).")
-    if len(sys.argv) < 2:
-        logger.info("Usage: python enhanced_report.py [signal_json_file] [output_report_file] [send_email=yes/no]")
-        logger.info("       python enhanced_report.py email-only [report_file]")
-        logger.info("  If signal_json_file is not provided, latest file will be used.")
-        logger.info("  If output_report_file is not provided, 'report.txt' will be used.")
-        logger.info("  If send_email is not provided, email will be sent.")
-        logger.info("  Use 'email-only' as first argument to only send an existing report.")
-        
-        json_path = find_latest_signal_file()
-        if not json_path:
-            logger.error("No signal file found and none provided.")
-            return 1
-        
-        output_path = "report.txt"
-        send_email = True
+
+    json_path_arg = None
+    output_path_arg = "report.txt" # default
+    send_email_arg = True # default
+
+    # Argument parsing
+    # sys.argv[0] is script name.
+    # sys.argv[1] if present could be json_path or 'email-only'
+    # sys.argv[2] if present could be report_file_path (for email-only) or output_path_arg
+    # sys.argv[3] if present could be send_email_arg
+
+    if len(sys.argv) > 1:
+        # Avoid treating parts of 'email-only' mode as normal arguments
+        if sys.argv[1].lower() != 'email-only':
+            json_path_arg = sys.argv[1]
+            if len(sys.argv) > 2:
+                output_path_arg = sys.argv[2]
+                if len(sys.argv) > 3:
+                    send_email_arg = sys.argv[3].lower() not in ('no', 'false', '0')
+
+    final_json_path_to_process = None
+    if json_path_arg:
+        if os.path.exists(json_path_arg):
+            final_json_path_to_process = json_path_arg
+            logger.info(f"Using explicitly provided JSON signal file: {final_json_path_to_process}")
+        else:
+            logger.warning(f"Provided JSON path '{json_path_arg}' does not exist. Attempting to find latest as fallback.")
+            final_json_path_to_process = find_latest_signal_file()
     else:
-        json_path = sys.argv[1]
-        output_path = sys.argv[2] if len(sys.argv) > 2 else "report.txt"
-        send_email = True
-        if len(sys.argv) > 3:
-            send_email = sys.argv[3].lower() not in ('no', 'false', '0')
-    
-    # Run the workflow
-    success = enhanced_report_workflow(json_path, output_path, send_email)
-    return 0 if success else 1
+        logger.info("No JSON signal file provided as argument. Attempting to find latest.")
+        final_json_path_to_process = find_latest_signal_file()
+
+    if not final_json_path_to_process:
+        logger.error("No signal JSON file could be determined for processing. Exiting.")
+        sys.exit(1)
+
+    # Ensure the determined path actually exists before calling workflow
+    # (find_latest_signal_file should return an existing file, but this is a good safeguard)
+    if not os.path.exists(final_json_path_to_process):
+        logger.error(f"The determined signal JSON file does not exist: {final_json_path_to_process}. Exiting.")
+        sys.exit(1)
+
+    logger.info(f"Final JSON path to process: {final_json_path_to_process}")
+    logger.info(f"Output report file will be: {output_path_arg}")
+    logger.info(f"Send email flag: {send_email_arg}")
+
+    success = enhanced_report_workflow(
+        json_to_process=final_json_path_to_process,
+        output_path=output_path_arg,
+        send_email=send_email_arg
+    )
+    sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
     sys.exit(main())
