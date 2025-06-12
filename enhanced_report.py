@@ -232,15 +232,32 @@ def generate_report_from_json(json_path, output_path="report.txt"):
         return False
 
 def find_latest_signal_file(signals_dir="results/live_signals"):
-    """Find the latest signal JSON file in the given directory"""
+    """Find the latest signal JSON file in the given directory by filename (date part)."""
     base_path = Path(os.path.dirname(os.path.abspath(__file__))) / signals_dir
-    json_files = sorted(glob.glob(str(base_path / "daily_signal_*.json")))
-    
+    file_pattern = str(base_path / "daily_signal_*.json")
+    json_files = glob.glob(file_pattern)
+
     if not json_files:
+        logger.warning(f"No files found matching pattern: {file_pattern}")
         return None
+
+    # Sorts alphabetically/lexicographically, which works for "YYYY-MM-DD" filenames.
+    json_files.sort()
+
+    latest_file_by_name = json_files[-1] # Get the last file after sorting
     
-    # Sort by file modification time (most recent first)
-    return max(json_files, key=os.path.getmtime)
+    mtime_str = 'N/A'
+    try:
+        if os.path.exists(latest_file_by_name):
+            mtime_val = os.path.getmtime(latest_file_by_name)
+            # Ensure datetime is available if not already imported globally or at function scope
+            # For this change, assuming datetime is imported at the top of the file.
+            mtime_str = datetime.datetime.fromtimestamp(mtime_val).strftime('%Y-%m-%d %H:%M:%S')
+    except Exception as e:
+        logger.error(f"Could not get mtime for {latest_file_by_name}: {e}")
+
+    logger.info(f"Found {len(json_files)} signal files matching {file_pattern}. Selected latest by filename: {latest_file_by_name} (mtime: {mtime_str})")
+    return latest_file_by_name
 
 def track_signal_changes(signals_dir="results/live_signals"):
     """Track signal changes and create a human-readable summary"""
