@@ -33,8 +33,6 @@ jobs:
         python -m pip install --upgrade pip
         pip install pandas numpy yfinance tqdm
 
-    # ... (existing steps above) ...
-
     - name: Run signal generator script
       id: run_signal_script
       run: |
@@ -42,7 +40,6 @@ jobs:
         TODAY_DATE=$(date +'%Y-%m-%d')
         JSON_NAME="results/live_signals/daily_signal_${TODAY_DATE}.json"
         python scripts/high_current.py > signal_output.txt
-        # Output the expected JSON file name
         echo "json_path=${JSON_NAME}" >> $GITHUB_OUTPUT
       continue-on-error: true
 
