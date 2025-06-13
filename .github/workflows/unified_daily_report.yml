@@ -33,11 +33,17 @@ jobs:
         python -m pip install --upgrade pip
         pip install pandas numpy yfinance tqdm
 
+    # ... (existing steps above) ...
+
     - name: Run signal generator script
-      id: run_script
+      id: run_signal_script
       run: |
         cd $GITHUB_WORKSPACE
+        TODAY_DATE=$(date +'%Y-%m-%d')
+        JSON_NAME="results/live_signals/daily_signal_${TODAY_DATE}.json"
         python scripts/high_current.py > signal_output.txt
+        # Output the expected JSON file name
+        echo "json_path=${JSON_NAME}" >> $GITHUB_OUTPUT
       continue-on-error: true
 
     # Set current date for all steps
@@ -49,25 +55,15 @@ jobs:
     - name: Process signals with enhanced report
       id: enhance_report
       run: |
-        # Find the latest signal JSON file
-        LATEST_JSON=$(find results/live_signals -type f -name "daily_signal_*.json" | sort -r | head -n 1)
-        
-        if [ -n "$LATEST_JSON" ]; then
-          echo "Latest JSON file: $LATEST_JSON"
-          echo "Generating enhanced report..."
-          
-          # Generate the enhanced report with signal tracking
-          python enhanced_report.py "$LATEST_JSON" report.txt no
-          
+        JSON_FILE="${{ steps.run_signal_script.outputs.json_path }}"
+        if [ -n "$JSON_FILE" ] && [ -f "$JSON_FILE" ]; then
+          echo "Processing specific JSON file: $JSON_FILE"
+          python enhanced_report.py "$JSON_FILE" report.txt no
           if [ -f report.txt ] && [ -s report.txt ]; then
             echo "report_exists=true" >> $GITHUB_OUTPUT
             echo "report_not_empty=true" >> $GITHUB_OUTPUT
             echo "Enhanced report generated successfully."
-            
-            # Track signals automatically (only track overall signal)
-            python auto_tracker.py --file "$LATEST_JSON"
-            
-            # Display report summary
+            python auto_tracker.py --file "$JSON_FILE"
             echo "Report summary:"
             head -n 10 report.txt
             echo "..."
@@ -77,7 +73,7 @@ jobs:
             echo "Failed to generate enhanced report."
           fi
         else
-          echo "No JSON file found."
+          echo "No JSON file found at $JSON_FILE."
           echo "report_exists=false" >> $GITHUB_OUTPUT
           echo "report_not_empty=false" >> $GITHUB_OUTPUT
         fi
