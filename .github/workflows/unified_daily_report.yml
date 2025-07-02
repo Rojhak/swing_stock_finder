@@ -43,12 +43,10 @@ jobs:
         echo "json_path=${JSON_NAME}" >> $GITHUB_OUTPUT
       continue-on-error: true
 
-    # Set current date for all steps
     - name: Set current date
       id: set_date
       run: echo "TODAY_DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
 
-    # Process the signal with enhanced reporting
     - name: Process signals with enhanced report
       id: enhance_report
       run: |
@@ -79,38 +77,25 @@ jobs:
     - name: Send email report using Python (Primary)
       id: send_email_primary
       if: steps.enhance_report.outputs.report_exists == 'true' && steps.enhance_report.outputs.report_not_empty == 'true'
-      run: |
-        echo "DEBUG: ---- Primary Python Email Step ----"
-        echo "DEBUG: Current working directory: $(pwd)"
-        echo "DEBUG: Listing files in current directory:"
-        ls -la
-        echo "DEBUG: Content of secrets file (myact.secrets) (from workflow root):"
-        cat myact.secrets || echo "DEBUG: myact.secrets file not found at $(pwd)/myact.secrets or cat failed"
-        echo "DEBUG: ---- Environment variables set by 'env:' block (should be from secrets) ----"
-        echo "DEBUG: MAIL_HOST='$MAIL_HOST'"
-        echo "DEBUG: MAIL_PORT='$MAIL_PORT'"
-        echo "DEBUG: MAIL_USERNAME='$MAIL_USERNAME'"
-        echo "DEBUG: MAIL_PASSWORD_SET_CHECK (non-empty is good): '${MAIL_PASSWORD:+SET}'" # Avoid printing password
-        echo "DEBUG: ---- End of environment variables ----"
-        echo "Sending email report using enhanced_report.py..."
-        python enhanced_report.py email-only report.txt
-      env:
+      env: # <-- THIS BLOCK IS THE FIX
         MAIL_HOST: ${{ secrets.MAIL_HOST }}
         MAIL_PORT: ${{ secrets.MAIL_PORT }}
         MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
         MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+      run: |
+        echo "Sending email report using enhanced_report.py..."
+        python enhanced_report.py email-only report.txt
         
     # Fallback email sending method using GitHub Action
     - name: Send email report using GitHub Action (Fallback)
       if: steps.enhance_report.outputs.report_exists == 'true' && steps.enhance_report.outputs.report_not_empty == 'true' && steps.send_email_primary.outcome != 'success'
       uses: dawidd6/action-send-mail@v3
       with:
-        server_address: smtp.gmail.com # Hardcoded for Gmail
-        server_port: 587 # Hardcoded for Gmail STARTTLS
-        # 'secure' defaults to false for port 587, action should attempt STARTTLS
+        server_address: smtp.gmail.com
+        server_port: 587
         username: ${{ secrets.MAIL_USERNAME }}
         password: ${{ secrets.MAIL_PASSWORD }}
-        subject: Daily Trading Signal Report (Fallback Action Test) - ${{ env.TODAY_DATE }}
+        subject: Daily Trading Signal Report (Fallback Action) - ${{ env.TODAY_DATE }}
         body: file://report.txt
         to: katar.fhm@gmail.com
         from: Rojhak Azadi <${{ secrets.MAIL_USERNAME }}>
